@@ -31,8 +31,8 @@ re-presents the gun's HID output to the MiSTer as a Sinden-in-joystick-mode devi
                  ┌──────────────────────── Radxa Cubie A7Z ────────────────────────┐
                  │                                                                  │
  Sinden ──USB──▶ │ USB 3.1 port (dwc3/xHCI)                                         │
-   gun           │   ├─ uvcvideo  /dev/video0   (MJPEG 640x480 @ 60 fps)            │
-                 │   ├─ cdc-acm   /dev/ttyACM0  (driver ⇄ gun serial, 115200 8N1)   │
+   gun           │   ├─ uvcvideo  /dev/videoN   (MJPEG 640x480 @ 60 fps)            │
+                 │   ├─ cdc-acm   /dev/ttyACMn  (driver ⇄ gun serial, 115200 8N1)   │
                  │   └─ usbhid    /dev/input/event*  "Unknown SindenLightgun ..."   │
                  │                    (one HID iface, 1 ms: mouse report = 3 btns +  │
                  │                     ABS_X/Y 0..32767; keyboard report = KEY_*)   │
@@ -138,13 +138,13 @@ There is no light-gun feature on the RT4K (only the 5X has one). The working rec
 `Scaling/Crop → Masking Color` R/G/B = 31 (white) with `Show: Always`, then crop/scale the
 image so the mask forms a border (Sinden guidance: ~2 % of width white, black outside it).
 No serial command toggles the mask, but profiles load over serial, so "border on/off" is two
-profiles switched through DonutShop (`POST http://donutshop.local/api/command`
+profiles switched through DonutShop's REST API (`POST /api/command`
 `{"command":"prof load <path>"}`, RT4K fw ≥ 1.75).
 
 ## What the real gun looks like (measured 2026-09-29, black non-recoil, firmware 1.8)
 
 - USB tree: internal hub `0424:2512` → camera `16d0:1095 SindenCamA` (UVC, MJPEG 640x480 and
-  smaller sizes at 60 fps; YUYV 30 fps) + gun MCU `16c0:0f38` (CDC-ACM `ttyACM0` + one HID
+  smaller sizes at 60 fps; YUYV 30 fps) + gun MCU `16c0:0f38` (CDC-ACM `ttyACM*` + one HID
   interface, interrupt interval 1 ms). The camera ID is not in sindenrs's table upstream
   (patched locally: `CAMERA_IDS += (0x16d0, 0x1095)`).
 - HID report descriptor (mouse mode; firmware < 1.9 has no joystick mode):

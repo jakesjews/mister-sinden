@@ -5,7 +5,7 @@ Requires=sinden-gadget.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /opt/mister-sinden/bridge/hid-bridge/hid_bridge.py --sse-port 8765 --pump-offscreen-shot
+ExecStart=/usr/bin/python3 /opt/mister-sinden/bridge/hid-bridge/hid_bridge.py --pump-offscreen-shot
 # Drop --pump-offscreen-shot to get the pump back as a plain joystick button (10).
 # Exits when the gun disappears; restart picks the gun up again.
 Restart=always

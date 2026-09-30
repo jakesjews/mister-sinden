@@ -7,7 +7,9 @@ position feed and prints OffsetX / OffsetY / OffsetXRatio / OffsetYRatio for
 LightgunMono.exe.config, so the driver reports coordinates relative to the game image
 and MiSTer needs no F10 calibration.
 
-    tools/calibrate-offsets.py [--feed http://<cubie>:8765/events]   (default: $CUBIE_HOST or radxa-cubie-a7z.local)
+    CUBIE_HOST=<cubie> tools/calibrate-offsets.py        (or --feed http://<cubie>:8765/events)
+
+Needs the bridge's position feed, which is off by default (see docs/development.md).
 """
 import argparse
 import json
@@ -33,8 +35,12 @@ def shots(feed):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--feed", default=f"http://{os.environ.get('CUBIE_HOST', 'radxa-cubie-a7z.local')}:8765/events")
+    ap.add_argument("--feed", help="feed URL (default: http://$CUBIE_HOST:8765/events)")
     args = ap.parse_args()
+    if not args.feed:
+        if not os.environ.get("CUBIE_HOST"):
+            ap.error("set CUBIE_HOST or pass --feed")
+        args.feed = f"http://{os.environ['CUBIE_HOST']}:8765/events"
     print(f"Listening on {args.feed}. Shoot the game image's corners: {', '.join(ORDER)}.")
     pts = []
     for (x, y), name in zip(shots(args.feed), ORDER):

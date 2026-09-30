@@ -8,7 +8,7 @@ single ASCII command bytes, single raw reply bytes, no framing:
     0            "attached to lightgun" mode: keyboard output stops, presses answered by polling
     4            -> '0'/'1' pedal state (attached mode)  3            back to standalone keyboard mode
 
-    tools/sinden-pedal.py [--port /dev/ttyACM1] status | keyboard | attached | poll | set-key c | set-id 0
+    tools/sinden-pedal.py [--port /dev/ttyACMn] status | keyboard | attached | poll | set-key c | set-id 0
 """
 import argparse
 import os

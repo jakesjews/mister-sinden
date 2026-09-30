@@ -216,7 +216,7 @@ def main():
     ap.add_argument("--rate", type=float, default=0.0,
                     help="max report rate in Hz (0 = send on every change)")
     ap.add_argument("--sse-port", type=int, default=0,
-                    help="serve the latest position as Server-Sent Events on this port (0 = off)")
+                    help="serve the latest position as Server-Sent Events on this port for the dev tools (0 = off, the default)")
     ap.add_argument("--pedal-as", default="button:11",
                     help="what a Sinden pedal press does: button:N (joystick button N), trigger, or offscreen (default button:11)")
     ap.add_argument("--pedal-key", default="KEY_C", help="evdev key the pedal types (Sinden default KEY_C)")

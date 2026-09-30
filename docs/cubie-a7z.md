@@ -8,8 +8,8 @@ Everything here was read off the running board on 2026-09-29 (not from marketing
 |---|---|
 | SoC | Allwinner A733 (`sun60iw2`), 2× Cortex-A76 @ 2.0 GHz + 6× Cortex-A55 @ 1.8 GHz |
 | RAM | 2 GB (+ 1 GB zram swap) |
-| Storage | 59.5 GB eMMC; root (`/dev/mmcblk0p3`) is only 11.7 GB — ~48 GB unpartitioned |
-| OS | Debian 12 bookworm (Radxa image), vendor kernel `5.15.147-21.1-a733` |
+| Storage | microSD card (the OS image lives on it) |
+| OS | Debian 12 bookworm ([cuihuir/radxa-a7z-debian12](https://github.com/cuihuir/radxa-a7z-debian12) v0.3.3), kernel `5.15.147-21.1-a733` |
 | Network | `wlan0` only (AIC8800 USB WiFi on internal EHCI bus 3); no wired NIC detected |
 | Boot | U-Boot + `/boot/extlinux/extlinux.conf`; overlays via `rsetup`, cmdline via `/etc/kernel/cmdline` + `u-boot-update` |
 | Serial console | `ttyAS0` @ 115200 |
@@ -48,13 +48,13 @@ Y cable, or the GPIO header.
 
 ## Software installed for this project
 
-`mono-complete` 6.8.0.105 (Debian arm64), `libgdiplus`, `v4l-utils`, `evtest`,
-`python3-evdev`, `python3-numpy`, `libinput-tools`, `tmux`, `htop`, `iperf3`.
-Pre-existing: gcc/g++/cmake/git, `libevdev-dev`, `libv4l-0`, `libusb-1.0-0`, `libsdl2`.
+`install.sh` installs `mono-complete`, `libgdiplus`, `libsdl2-2.0-0`, `libjpeg62-turbo`, `python3`,
+`python3-evdev`, `v4l-utils`, `rsync`, `unzip`, `curl`, `git`, downloads Sinden's driver into `/opt/sinden`,
+and deploys this repo to `/opt/mister-sinden` (units, udev rule, driver config).
 
 ## Access
 
 - The Debian 12 image's defaults: user `radxa`, password `radxa`, SSH enabled, hostname
   `radxa-cubie-a7z` (reachable as `radxa-cubie-a7z.local` via mDNS).
 - `radxa` is in `video`, `plugdev`, `sudo`, but not `input` or `dialout`; the bridge services run as root.
-- `tools/cubie-ssh` wraps SSH (`CUBIE_HOST`, optional `CUBIE_KEY`).
+- `tools/cubie-ssh` wraps SSH (`CUBIE_HOST` required, optional `CUBIE_KEY`).

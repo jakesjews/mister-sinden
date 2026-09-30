@@ -20,6 +20,19 @@ tools/calibrate-offsets.py       four-corner calibration → driver OffsetX/Y va
 tools/cubie-ssh, tools/mister-ssh  ssh helpers
 ```
 
+## Position feed (for the dev tools)
+
+`tools/border-target.html` and `tools/calibrate-offsets.py` read the bridge's live position feed. It is
+off by default. To turn it on, run `sudo systemctl edit sinden-bridge`, add
+
+```
+[Service]
+ExecStart=
+ExecStart=/usr/bin/python3 /opt/mister-sinden/bridge/hid-bridge/hid_bridge.py --pump-offscreen-shot --sse-port 8765
+```
+
+and restart the service. The page is then at `http://<cubie>:8765/`.
+
 ## Status
 
 - [x] Cubie: USB gadget presents the bridge to the MiSTer as a Sinden (`16c0:0f01`) joystick

@@ -33,7 +33,8 @@
   <div class="dot" id="dot"></div>
   <div class="hint">Press F to go full-screen. Aim at a target, pull the trigger. Keys: [ / ] change border width.</div>
 <script>
-  // Live cursor: the bridge serves this page at http://<cubie>:8765/ and its Server-Sent-Events
+  // Live cursor (needs the bridge's position feed, off by default; see docs/development.md):
+  // the bridge serves this page at http://<cubie>:8765/ and its Server-Sent-Events
   // feed at /events ({buttons,x,y} in 0..65535), so the dot shows where the gun thinks it
   // points (red while the trigger is held). Browsers block the feed from a file:// copy of
   // this page, so open it from the bridge, or pass ?feed=http://<cubie>:8765/events from

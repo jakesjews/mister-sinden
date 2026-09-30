@@ -1,7 +1,8 @@
 #!/bin/sh
 # SSH into the Cubie. Usage: tools/cubie-ssh [command...]
-#   CUBIE_HOST  address of the Cubie (default: radxa-cubie-a7z.local)
+#   CUBIE_HOST  address of the Cubie (required)
 #   CUBIE_KEY   optional private key to use
-HOST="${CUBIE_HOST:-radxa-cubie-a7z.local}"
+: "${CUBIE_HOST:?set CUBIE_HOST to the IP address or hostname of the Cubie}"
+HOST="$CUBIE_HOST"
 set -- -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 ${CUBIE_KEY:+-i "$CUBIE_KEY" -o IdentitiesOnly=yes} "radxa@$HOST" "$@"
 exec ssh "$@"
