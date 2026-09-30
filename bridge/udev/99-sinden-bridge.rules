@@ -1,0 +1,5 @@
+# Restart the vendor driver whenever a Sinden gun (VID 16c0, PIDs 0f01/0f02/0f38/0f39) comes or goes.
+# The driver prints "Exit Lightgun1" when its gun disappears but the Mono process lingers, so a
+# plain Restart=always never fires; a udev-driven restart makes gun hot-plug reliable.
+# PRODUCT is "16c0/f38/100" style and is present on both add and remove events.
+ACTION=="add|remove", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ENV{PRODUCT}=="16c0/f01/*|16c0/f02/*|16c0/f38/*|16c0/f39/*", RUN+="/bin/systemctl --no-block restart sinden-driver.service"

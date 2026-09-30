@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sinden Border Target</title>
+<style>
+  /* Bench target for the Sinden: open full-screen (F11 / ⌃⌘F) on any monitor and aim the gun at it.
+     Sinden guidance: ~2% of screen width pure white, black around it. The gun treats the OUTER edge
+     of the white as the screen edge, so the crosshair positions below are relative to that edge. */
+  :root { --bw: 2vw; }
+  html, body { margin: 0; height: 100%; background: #000; color: #fff; font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  .border { position: fixed; inset: 0; border: var(--bw) solid #fff; box-sizing: border-box; pointer-events: none; }
+  .target { position: fixed; width: 5vmin; height: 5vmin; border-radius: 50%; border: 0.5vmin solid #f33; box-sizing: border-box; transform: translate(-50%, -50%); }
+  .target::after { content: attr(data-label); position: absolute; top: 110%; left: 50%; transform: translateX(-50%); color: #f33; white-space: nowrap; font-size: 2vmin; }
+  .center { left: 50%; top: 50%; }
+  .tl { left: calc(var(--bw) + 10vw); top: calc(var(--bw) + 10vh); }
+  .tr { right: calc(var(--bw) + 10vw); top: calc(var(--bw) + 10vh); transform: translate(50%, -50%); }
+  .bl { left: calc(var(--bw) + 10vw); bottom: calc(var(--bw) + 10vh); transform: translate(-50%, 50%); }
+  .br { right: calc(var(--bw) + 10vw); bottom: calc(var(--bw) + 10vh); transform: translate(50%, 50%); }
+  .hint { position: fixed; bottom: calc(var(--bw) + 2vh); left: 50%; transform: translateX(-50%); opacity: .5; }
+  .dot { position: fixed; width: 1.2vmin; height: 1.2vmin; border-radius: 50%; background: #3f3; transform: translate(-50%, -50%); display: none; }
+</style>
+</head>
+<body>
+  <div class="border"></div>
+  <div class="target center" data-label="center"></div>
+  <div class="target tl" data-label="10%,10%"></div>
+  <div class="target tr" data-label="90%,10%"></div>
+  <div class="target bl" data-label="10%,90%"></div>
+  <div class="target br" data-label="90%,90%"></div>
+  <div class="dot" id="dot"></div>
+  <div class="hint">Press F to go full-screen. Aim at a target, pull the trigger. Keys: [ / ] change border width.</div>
+<script>
+  // Live cursor: the bridge serves this page at http://<cubie>:8765/ and its Server-Sent-Events
+  // feed at /events ({buttons,x,y} in 0..65535), so the dot shows where the gun thinks it
+  // points (red while the trigger is held). Browsers block the feed from a file:// copy of
+  // this page, so open it from the bridge, or pass ?feed=http://<cubie>:8765/events from
+  // another http:// origin.
+  const dot = document.getElementById('dot');
+  const params = new URLSearchParams(location.search);
+  const feed = params.get('feed') || (location.protocol.startsWith('http') ? '/events' : null);
+  if (feed) {
+    const es = new EventSource(feed);
+    es.onmessage = e => {
+      const {buttons, x, y} = JSON.parse(e.data);
+      dot.style.display = 'block';
+      dot.style.background = (buttons & 1) ? '#f33' : '#3f3';
+      dot.style.left = (x / 65535 * 100) + 'vw';
+      dot.style.top = (y / 65535 * 100) + 'vh';
+    };
+    es.onerror = () => console.log('feed disconnected');
+  }
+  let bw = 2;
+  document.addEventListener('keydown', e => {
+    if (e.key === 'f' || e.key === 'F') document.documentElement.requestFullscreen?.();
+    if (e.key === '[') bw = Math.max(0.5, bw - 0.5);
+    if (e.key === ']') bw = Math.min(6, bw + 0.5);
+    document.documentElement.style.setProperty('--bw', bw + 'vw');
+  });
+</script>
+</body>
+</html>

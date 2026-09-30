@@ -1,0 +1,17 @@
+[Unit]
+Description=Sinden Lightgun driver (vendor LightgunMono under Mono)
+After=multi-user.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/sinden
+ExecStart=/usr/bin/mono /opt/sinden/LightgunMono.exe
+# The driver exits when no gun is attached ("E1"); keep retrying so hot-plug just works.
+Restart=always
+RestartSec=3
+Nice=-10
+StandardOutput=append:/var/log/sinden-driver.log
+StandardError=append:/var/log/sinden-driver.log
+
+[Install]
+WantedBy=multi-user.target

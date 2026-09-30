@@ -1,0 +1,14 @@
+[Unit]
+Description=USB HID gadget presenting the Sinden bridge to the MiSTer
+After=sys-kernel-config.mount
+Requires=sys-kernel-config.mount
+Conflicts=adbd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/mister-sinden/bridge/gadget/sinden-gadget.sh up
+ExecStop=/opt/mister-sinden/bridge/gadget/sinden-gadget.sh down
+
+[Install]
+WantedBy=multi-user.target
