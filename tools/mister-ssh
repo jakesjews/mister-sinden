@@ -1,10 +1,7 @@
 #!/bin/sh
-# SSH into the MiSTer (root). Key auth via ~/.ssh/mister-sinden_ed25519, password "1" as fallback.
-HOST="${MISTER_HOST:-mister}"
-KEY="${MISTER_KEY:-$HOME/.ssh/mister-sinden_ed25519}"
-OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8"
-if [ -f "$KEY" ]; then
-  exec ssh -i "$KEY" -o IdentitiesOnly=yes -o BatchMode=yes $OPTS "root@$HOST" "$@"
-else
-  exec sshpass -p "${MISTER_PASS:-1}" ssh $OPTS -o PubkeyAuthentication=no -o PreferredAuthentications=password "root@$HOST" "$@"
-fi
+# SSH into the MiSTer as root. Usage: tools/mister-ssh [command...]
+#   MISTER_HOST  address of the MiSTer (required)
+#   MISTER_KEY   optional private key to use
+: "${MISTER_HOST:?set MISTER_HOST to the IP address or hostname of your MiSTer}"
+set -- -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 ${MISTER_KEY:+-i "$MISTER_KEY" -o IdentitiesOnly=yes} "root@$MISTER_HOST" "$@"
+exec ssh "$@"

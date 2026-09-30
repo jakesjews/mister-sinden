@@ -1,79 +1,64 @@
 # mister-sinden
 
-Use a Sinden Lightgun with **unmodified MiSTer FPGA cores** by putting a Radxa Cubie A7Z
-between the gun and the MiSTer:
+Play light gun games on MiSTer with your Sinden. The gun plugs into a small Radxa Cubie A7Z, the Cubie
+plugs into your MiSTer, and your RetroTINK 4K draws the white border. It works with the regular MiSTer
+cores, and the Sinden pedal works too.
 
 ```
-Sinden ──USB──▶ Cubie A7Z (runs the Sinden driver, re-emits the gun as a USB HID joystick)
-                   └──USB──▶ MiSTer ──HDMI──▶ RetroTINK 4K Pro (draws the white border) ──▶ TV
+Sinden (+ pedal) ── Cubie ── MiSTer ── RetroTINK 4K ── TV
 ```
 
-MiSTer already recognises Sinden's USB IDs as a light gun (since Feb 2025) and treats the
-device's X/Y as Player 1's analog stick, which every gun-capable core reads as beam position.
-Sinden's own MiSTer solution instead runs the camera processing on the DE10-Nano with a
-patched kernel and border-patched cores; this project moves that work to the Cubie so the
-MiSTer stays stock and the RT4K supplies the border.
+## What you need
 
-Read [`docs/architecture.md`](docs/architecture.md) for the design and the evidence behind
-it, and [`docs/cubie-a7z.md`](docs/cubie-a7z.md) for the board facts.
+- [Radxa Cubie A7Z, 2 GB](https://www.amazon.com/dp/B0HGR1XPDS)
+- [microSD card](https://www.amazon.com/dp/B08GY9NYRM)
+- [USB-A to USB-C cable](https://www.amazon.com/dp/B0BPCBP15P), Cubie to MiSTer
+- [USB-C to USB-A adapter](https://www.amazon.com/dp/B072V9CNTK) for the gun, or a
+  [USB-C hub](https://www.amazon.com/dp/B07PY87TBD) if you also use the pedal
+- A RetroTINK 4K
 
-## Using it on the MiSTer
+The Cubie and gun run off the MiSTer's USB, so make sure your MiSTer's power supply has room for them
+alongside everything else you have plugged in.
 
-**Hardware.** Plug the Sinden **and the pedal** into a small USB hub on the Cubie's USB-C 3.1 port —
-any USB 2.0+ hub with two free ports works, e.g. the [UGREEN USB-C to 4× USB-A hub](https://www.amazon.com/dp/B07PY87TBD). The
-Cubie's other USB-C port (power/OTG) goes to the MiSTer's USB hub. The gun and pedal reach the
-MiSTer as one device (a Sinden light gun), so MiSTer's own menus do all the setup — no files.
+## Setup
 
-1. **Once, in the MiSTer main menu:** System Settings → *Define joystick buttons*, using the gun.
-   D-pad for the directions, side buttons for A / B / Select / Start, space bar on a keyboard to skip
-   everything else. Hold the gun still (point it at the screen) while mapping, or its aim can be
-   captured as a stick. This lets the gun take a player slot in every core.
-2. **Once per core:** load it, set its gun options in the OSD, then *Define <core> buttons* and press
-   the trigger for the gun button and the pedal wherever you want it. Save settings.
-3. Press a gun button once after loading a core so the gun is Player 1, and play.
+1. **Flash the Cubie** with the [Debian 12 image for the Cubie A7Z](https://github.com/cuihuir/radxa-a7z-debian12/releases).
+   Radxa's official image doesn't work. We used v0.3.3.
 
-| Core | OSD settings | Trigger → | Pedal (suggested) |
-|---|---|---|---|
-| NES | Peripheral: **Zapper(Joy1)**, Zapper Trigger: **Joystick** | Zapper/Vaus Btn | B |
-| SNES | Super Scope: **Joy1**, Super Scope Btn: **Joy**, Gun Type: Super Scope / Justifier | A (SS Fire) | B (SS Cursor) |
-| MegaDrive / MegaCD | Gun Control: **Joy1**, Gun Fire: **Joy** | A | B (reload) |
-| SMS | Gun Control: **Joy1**, Gun Fire: **Joy** | Fire 1 | Fire 2 |
-| PSX | Pad1: **GunCon** (or Justifier) | O (Gun Fire) | Start (Gun A) — takes cover in Time Crisis; Gun B pauses it |
-| Atari 7800 | Port1 Input: **Lightgun**, Gun Control: **Joy1**, Gun Fire: **Joy** | Fire1 | Fire2 |
+2. **Install.** Power the Cubie from either USB-C port. The one that lights it up is its power port;
+   the other one is for the gun. Get it online, open a terminal on it (login `radxa`, password `radxa`)
+   and run:
+   ```
+   curl -fsSL https://raw.githubusercontent.com/jakesjews/mister-sinden/main/install.sh | sudo bash
+   ```
+   When it's done, `sudo poweroff`. Running it again is safe, and it's also how you update.
 
-The pump action is an off-screen shot (reload) everywhere, no mapping needed. Optional:
-`player_1_controller=16c0_0f01` in `MiSTer.ini` makes the gun Player 1 whenever it is pressed, which
-games like Time Crisis require.
+3. **Plug it in.** Gun (and pedal) into the Cubie's gun port, and the Cubie's power port into the
+   MiSTer's USB hub. From now on the Cubie starts with the MiSTer.
 
-## Layout
+4. **White border.** On the RetroTINK 4K, go to *Scaling/Crop → Masking Color*, set each of R, G and B
+   to 31 to make the frame white, and set Show to *Always*. Then shrink the picture until the frame shows
+   on all four sides.
 
-```
-bridge/gadget/sinden-gadget.sh   configfs USB gadget: VID 16c0 PID 0f01, one joystick HID
-bridge/hid-bridge/hid_bridge.py  gun evdev → /dev/hidg0 report translator (+ SSE position feed, pump = off-screen shot)
-bridge/systemd/*.service         gadget / driver / bridge units;  bridge/install.sh deploys to /opt/mister-sinden
-bridge/udev/99-sinden-bridge.rules  restart the driver when a gun is plugged/unplugged
-docs/                            architecture + hardware notes
-tools/border-target.html         bench target: white border + crosshairs, shows the live aim from the feed
-tools/sinden-pedal.py            pedal serial tool: status / keyboard / attached / poll / set-key / set-id
-tools/calibrate-offsets.py       four-corner calibration → driver OffsetX/Y values
-tools/cubie-ssh, tools/mister-ssh  ssh helpers
-```
+5. **Map the gun** in MiSTer's *Define joystick buttons* using the gun's D-pad and its four side buttons.
+   Keep it pointed at the screen while you map.
 
-## Status
+6. **Per core:** turn on the core's light gun option, then map the trigger (and the pedal, if you have
+   one) in *Define buttons*, and save.
 
-- [x] Cubie: gadget mode verified, `/dev/hidg0` gadget bound as a Sinden
-- [x] Cubie: vendor driver (Mono, aarch64 Pi5 build) loads and runs
-- [x] Gun on the Cubie: camera + serial + evdev nodes enumerated; driver handshakes (fw 1.8), positions echo back through the gun's HID into the bridge
-- [x] systemd units: gadget → driver → bridge, survive reboot and gun hot-plug
-- [ ] Tracking verified against a white border (tools/border-target.html)
-- [x] MiSTer enumerates the gadget as a Sinden joystick; set up with MiSTer's own Define-buttons menus (no files)
-- [x] NES core: Zapper aims and fires with an unmodified core
-- [x] All 10 gun inputs (trigger, pump, 4 side buttons, D-pad) arrive as distinct joystick buttons
-- [x] MegaDrive core works; per-core quirks: each core needs its own OSD gun options (NES: Zapper Trigger = Joystick)
-- [x] Pump action = off-screen shot (bridge `--pump-offscreen-shot`, on by default in the unit)
-- [x] Sinden pedal on a hub on the Cubie: merged by the bridge into the gun as button 11 (bridge also switches the pedal to keyboard mode on attach); verified end to end on the Cubie through a 4-port USB 2.0 hub
-- [ ] Pedal mapped in a core's Define-buttons wizard (should work: it is a button of the gun device)
-- [x] Gun hot-plug: udev rule restarts the vendor driver on add/remove (it otherwise hangs after an unplug)
-- [ ] SNES/PSX/SMS/7800 cores checked
-- [ ] RetroTINK 4K masking-colour border profiles via DonutShop
-- [ ] Native driver (sindenrs) replacing Mono
+## Playing
+
+- **Press one of the gun's side buttons after loading a game.** That's what wakes the gun up in that game.
+- The pump reloads by firing off-screen.
+- Crosshair a little off? Press F10 and shoot the edges of the picture. Each core remembers its own.
+- If a game needs the gun as Player 1, add `player_1_controller=16c0_0f01` to `MiSTer.ini`.
+
+## Troubleshooting
+
+- **Gun does nothing:** press a side button, and check the core's light gun option is on and saved.
+- **Nothing works at all:** check the Cubie's two cables aren't swapped, then unplug it and plug it back in.
+
+Recoil Sindens and two-gun setups haven't been tried yet.
+
+The Sinden driver comes from sindenlightgun.com (the installer downloads it), and the Cubie image is by
+[cuihuir](https://github.com/cuihuir/radxa-a7z-debian12). The nerdy details are in [docs/](docs/development.md).

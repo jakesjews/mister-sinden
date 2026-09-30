@@ -54,6 +54,7 @@ Pre-existing: gcc/g++/cmake/git, `libevdev-dev`, `libv4l-0`, `libusb-1.0-0`, `li
 
 ## Access
 
-- `ssh radxa@192.168.50.212` (see `tools/cubie-ssh`); key `~/.ssh/mister-sinden_ed25519`.
-- Passwordless sudo: `/etc/sudoers.d/010_radxa-nopasswd`.
-- `radxa` is in `video`, `plugdev`, `sudo`, but **not** `input` (needed for `/dev/input/*` without sudo).
+- The Debian 12 image's defaults: user `radxa`, password `radxa`, SSH enabled, hostname
+  `radxa-cubie-a7z` (reachable as `radxa-cubie-a7z.local` via mDNS).
+- `radxa` is in `video`, `plugdev`, `sudo`, but not `input` or `dialout`; the bridge services run as root.
+- `tools/cubie-ssh` wraps SSH (`CUBIE_HOST`, optional `CUBIE_KEY`).

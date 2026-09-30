@@ -63,7 +63,7 @@ up() {
         echo 0              > "$G/functions/hid.usb0/protocol"
         echo 0              > "$G/functions/hid.usb0/subclass"
         echo $REPORT_LENGTH > "$G/functions/hid.usb0/report_length"
-        echo "$REPORT_DESC" | xxd -r -p > "$G/functions/hid.usb0/report_desc"
+        printf "$(echo $REPORT_DESC | tr -d ' ' | sed 's/../\\x&/g')" > "$G/functions/hid.usb0/report_desc"
         ln -sf "$G/functions/hid.usb0" "$G/configs/c.1/"
     fi
     if [ "$(cat "$G/UDC")" = "$UDC_NAME" ]; then

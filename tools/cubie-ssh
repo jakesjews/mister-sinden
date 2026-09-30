@@ -1,6 +1,7 @@
 #!/bin/sh
-# SSH into the Cubie A7Z bridge board. Usage: tools/cubie-ssh [command...]
-HOST="${CUBIE_HOST:-192.168.50.212}"
-KEY="${CUBIE_KEY:-$HOME/.ssh/mister-sinden_ed25519}"
-exec ssh -i "$KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-  -o LogLevel=ERROR -o BatchMode=yes -o ConnectTimeout=8 "radxa@$HOST" "$@"
+# SSH into the Cubie. Usage: tools/cubie-ssh [command...]
+#   CUBIE_HOST  address of the Cubie (default: radxa-cubie-a7z.local)
+#   CUBIE_KEY   optional private key to use
+HOST="${CUBIE_HOST:-radxa-cubie-a7z.local}"
+set -- -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 ${CUBIE_KEY:+-i "$CUBIE_KEY" -o IdentitiesOnly=yes} "radxa@$HOST" "$@"
+exec ssh "$@"
