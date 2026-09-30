@@ -252,6 +252,13 @@ def main():
         except OSError as e:
             log.warning("grab %s failed: %s", d.path, e)
 
+    # Take aim from exactly one node: the gun's mouse node, where the driver sends positions. A gun with
+    # joystick mode switched on in its firmware also exposes a joystick node with its own axes; reading
+    # both could make the aim jump between them. Use the joystick node only if there is no mouse node.
+    aim = [d for d in devs if d.fd in scalers and d is not joystick_node]
+    aim_fd = aim[0].fd if aim else (joystick_node.fd if joystick_node is not None and joystick_node.fd in scalers else None)
+    log.info("aim from %s", next((d.path for d in devs if d.fd == aim_fd), "nothing (no absolute axes found)"))
+
     hidg = None if args.dry_run else os.open(args.hidg, os.O_WRONLY | os.O_NONBLOCK)
     feed = PositionFeed(args.sse_port) if args.sse_port else None
     rep = Report()                       # physical state: real aim + real buttons
@@ -377,7 +384,7 @@ def main():
                         flush()
                 continue
             for ev in events:
-                if ev.type == E.EV_ABS and fd in scalers:
+                if ev.type == E.EV_ABS and fd == aim_fd:
                     if ev.code == E.ABS_X:
                         v = scalers[fd][0](ev.value)
                         if v != rep.x:

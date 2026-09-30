@@ -15,7 +15,8 @@ Sinden (+ pedal) ── Cubie ── MiSTer ── RetroTINK 4K ── TV
 - [USB-A to USB-C cable](https://www.amazon.com/dp/B0BPCBP15P), Cubie to MiSTer
 - [USB-C to USB-A adapter](https://www.amazon.com/dp/B072V9CNTK) for the gun, or a
   [USB-C hub](https://www.amazon.com/dp/B07PY87TBD) if you also use the pedal
-- A RetroTINK 4K
+- A RetroTINK 4K, for the white border. Cores with their own Sinden border option (some arcade cores
+  have one) don't need it.
 
 The Cubie and gun run off the MiSTer's USB, so make sure your MiSTer's power supply has room for them
 alongside everything else you have plugged in.
@@ -36,9 +37,9 @@ alongside everything else you have plugged in.
 3. **Plug it in.** Gun (and pedal) into the Cubie's gun port, and the Cubie's power port into the
    MiSTer's USB hub. From now on the Cubie starts with the MiSTer.
 
-4. **White border.** On the RetroTINK 4K, go to *Scaling/Crop → Masking Color*, set each of R, G and B
-   to 31 to make the frame white, and set Show to *Always*. Then shrink the picture until the frame shows
-   on all four sides.
+4. **White border.** Skip this for cores with their own Sinden border option. On the RetroTINK 4K, go
+   to *Scaling/Crop → Masking Color*, set each of R, G and B to 31 to make the frame white, and set Show
+   to *Always*. Then shrink the picture until the frame shows on all four sides.
 
 5. **Map the gun** in MiSTer's *Define joystick buttons* using the gun's D-pad and its four side buttons.
    Keep it pointed at the screen while you map.
