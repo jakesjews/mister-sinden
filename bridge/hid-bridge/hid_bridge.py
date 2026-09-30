@@ -22,6 +22,8 @@ while it is pulled the report shows the top-left corner (off-screen for every co
 with the trigger held, so games with off-screen reload reload; releasing restores the aim.
 """
 import argparse
+import fcntl
+import glob
 import http.server
 import json
 import logging
@@ -30,6 +32,7 @@ import select
 import socketserver
 import struct
 import sys
+import termios
 import threading
 import time
 
@@ -45,7 +48,7 @@ GUN_NAME_PREFIX = "Unknown SindenLightgun"
 
 # Mouse-mode gun (firmware < 1.9): the driver's button table (bridge/driver/LightgunMono.exe.config)
 # makes every physical button emit a distinct key, mapped here to the numbering Sinden's own
-# MiSTer per-core maps expect (see mister/config-inputs/README.md).
+# MiSTer docs assume (trigger 0x120 ... pedal 0x12a on the MiSTer side).
 MOUSE_MODE_BUTTONS = {
     E.BTN_LEFT: 1,      # trigger
     E.KEY_1: 2,         # front-left   (A in Sinden's maps)
@@ -97,6 +100,32 @@ def find_pedal_device(exclude_paths):
             return d
         d.close()
     return None
+
+
+def pedal_keyboard_mode():
+    """Put every attached Sinden pedal in standalone keyboard mode (serial command '3').
+
+    Sinden's Windows app switches a pedal it adopts into a silent 'attached to lightgun' mode and
+    only restores it on a clean exit; a pedal in that mode types nothing. See tools/sinden-pedal.py.
+    """
+    for tty in glob.glob("/sys/class/tty/ttyACM*"):
+        try:
+            if "PRODUCT=16d0/1094/" not in open(f"{tty}/device/uevent").read():
+                continue
+            fd = os.open("/dev/" + os.path.basename(tty), os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+            try:
+                a = termios.tcgetattr(fd)
+                a[0] = a[1] = a[3] = 0
+                a[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
+                a[4] = a[5] = termios.B115200
+                termios.tcsetattr(fd, termios.TCSANOW, a)
+                fcntl.ioctl(fd, 0x5416, struct.pack("I", 0x002 | 0x004))   # TIOCMBIS: DTR | RTS
+                os.write(fd, b"3")
+                log.info("pedal on /dev/%s set to keyboard mode", os.path.basename(tty))
+            finally:
+                os.close(fd)
+        except OSError as e:
+            log.warning("could not set pedal keyboard mode via %s: %s", tty, e)
 
 
 class Report:
@@ -290,6 +319,7 @@ def main():
             log.warning("grab pedal %s failed: %s", d.path, e)
         pedal = d
         fds[d.fd] = d
+        pedal_keyboard_mode()
         log.info("pedal %s '%s' (%04x:%04x) → %s", d.path, d.name, d.info.vendor, d.info.product, args.pedal_as)
 
     def detach_pedal():

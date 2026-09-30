@@ -63,8 +63,9 @@ re-presents the gun's HID output to the MiSTer as a Sinden-in-joystick-mode devi
   out to already be MiSTer-perfect, the bridge can become a raw hidraw → hidg passthrough.
 - **Gadget.** `bridge/gadget/sinden-gadget.sh` builds the configfs gadget: one Joystick
   application collection, 16 buttons + X/Y 16-bit 0..65535. Linux/MiSTer maps Button 1..16
-  of a Joystick collection to `BTN_TRIGGER (0x120)..0x12F`, matching Sinden's shipped MiSTer
-  `.map` files (trigger 0x120, A 0x121, B 0x122, Select 0x123, D-pad 0x125–0x128).
+  of a Joystick collection to `BTN_TRIGGER (0x120)..0x12F` (trigger 0x120, front-left 0x121,
+  rear-left 0x122, rear-right 0x123, front-right 0x124, D-pad 0x125–0x128, pump 0x129, pedal 0x12a
+  — the numbering Sinden's own MiSTer docs assume).
 
 ### Pump action as an off-screen shot
 
@@ -78,19 +79,24 @@ double-fires. Remove the flag from `sinden-bridge.service` to get button 10 back
 ### Pedal
 
 The Sinden pedal is its own USB device: `16d0:1094 "Sinden Technology Ltd Sinden Pedal"`, a boot
-keyboard that types `c` (reassignable with Sinden's serial tool) plus a CDC port. Plugged into
-the Cubie next to the gun, the bridge grabs it and merges it into the gadget report — as joystick
-button 11 by default (map it per core), or as a trigger alias, or as an off-screen shot
-(`--pedal-as`). It is optional and hot-pluggable (rescanned every 3 s). Plugging it into the
-MiSTer directly would make it a separate keyboard device, not a button on the gun.
+keyboard that types `c` (reassignable) plus a CDC serial port. It plugs into a USB hub on the Cubie's
+host port next to the gun (e.g. [UGREEN USB-C to 4× USB-A](https://www.amazon.com/dp/B07PY87TBD)). The bridge grabs its keyboard
+node and merges it into the gun's HID report as joystick button 11 (evdev `0x12a` on the MiSTer;
+`--pedal-as trigger|offscreen` are alternatives), hot-pluggable (rescanned every 3 s).
+
+It has to share the gun's USB device: Main_MiSTer never merges separate USB devices, and its
+"Define buttons" wizard locks onto the one device that presses first. As a button of the gun
+device, the pedal can be mapped in any core's wizard like any gun button (in Time Crisis on PSX
+put it on Gun A — Sinden's own choice; Gun B pauses Time Crisis).
 
 Pedal serial protocol (decompiled from Sinden's pedal tool and Windows app; `tools/sinden-pedal.py`):
 115200 8N1 with DTR/RTS asserted, single ASCII command bytes, single raw reply bytes, no framing.
 `7` → key code, `9` → unique id, `5 <code>` set key (Arduino `Keyboard.h` codes), `8 <id>` set id,
 `0` enter "attached to lightgun" mode (keyboard output stops; state answered by `4` → `'0'`/`'1'`),
 `3` back to standalone keyboard mode. Sinden's Windows app sends `0` when it adopts a pedal and `3`
-on exit, so a pedal last used there can arrive silent; `tools/sinden-pedal.py keyboard` fixes it.
-Measured 2026-09-30: key `c` (99), id 0, keyboard mode.
+on exit, so a pedal last used there can arrive silent; the bridge therefore sends `3` whenever it
+attaches a pedal. The vendor Linux driver ignores the pedal's serial port when looking for guns
+(it checks `PRODUCT=16c0/…` in sysfs). Measured 2026-09-30: key `c` (99), id 0.
 
 ### Hot-plug
 
@@ -110,11 +116,16 @@ Everything therefore goes on one joystick collection with buttons ≥ 0x120.
 
 ### MiSTer-side requirements (unmodified cores)
 
+- `player_1_controller=16c0_0f01` in `MiSTer.ini` pins the gun to Player 1 whenever it is pressed
+  (a pad pressed first shares Player 1 rather than displacing the gun). Main re-reads the ini on
+  every core load (`cfg_parse()`), so ini edits need only a core reload; `debug=2` writes Main's
+  log unbuffered to `/tmp/debug.txt` ("Device … assigned to player N").
+
 - Main_MiSTer ≥ Feb 2025 (has the Sinden quirk). Nothing to patch.
-- A button map so the device gets a player slot: Main only assigns a player number when a
-  mapped button (code ≥ 0x120) is pressed. Sinden's `MiSTerSindenDriver` repo ships
-  `Config/inputs/*_input_16c0_0f01_v3.map` for each gun core; copying them to
-  `/media/fat/config/inputs/` avoids the "Define joystick buttons" dance.
+- A top-level button map so the device gets a player slot: Main only assigns a player number when
+  a button in the device's global map (`input_16c0_0f01_v3.map`, written by the main menu's
+  "Define joystick buttons") is pressed. Per-core maps (`<core>_input_16c0_0f01_v3.map`) come from
+  each core's "Define buttons". Users make both through the menus; this repo ships no map files.
 - Core OSD: point the gun at Joy1 ("Zapper: Joy1" etc.). Off-screen is inferred by cores from
   edge coordinates (NES x≤1/≥254, y≤8/≥224; PSX X or Y == 0 or 255), so the bridge must
   emit true 0 / 65535 at the edges.
