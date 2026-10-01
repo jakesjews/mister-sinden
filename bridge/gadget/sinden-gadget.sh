@@ -2,13 +2,18 @@
 # Bring up / tear down the USB HID gadget that presents the bridge to the MiSTer as a
 # Sinden Lightgun in joystick mode. Runs on the Cubie A7Z (root).
 #
-#   sinden-gadget.sh up      create+bind the gadget (stops the Radxa adbd gadget first)
-#   sinden-gadget.sh down    unbind+remove it
+#   sinden-gadget.sh up [PID]   create+bind the gadget (stops the Radxa adbd gadget first)
+#   sinden-gadget.sh down       unbind+remove it
 #   sinden-gadget.sh status
+#
+# The gadget uses the same USB ID as the gun plugged into the Cubie (16c0:0f01 blue, 0f02 red,
+# 0f38 black, 0f39 "player 2"), so the MiSTer sees that gun, and two Cubies with two guns look
+# like two different Sindens. The bridge calls "up <PID>" once it has seen the gun; the ID is
+# remembered, so on later boots the gadget comes up right away with the same ID.
 #
 # Descriptor: one Joystick application collection = 16 buttons + X/Y 16-bit 0..65535.
 # Linux hid-input maps Button 1..16 in a Joystick collection to BTN_TRIGGER(0x120)..0x12F,
-# which is what Main_MiSTer's Sinden quirk and Sinden's shipped .map files expect.
+# which is what Main_MiSTer's Sinden quirk and Sinden's own MiSTer docs expect.
 # Report (6 bytes, little-endian): [buttons lo][buttons hi][X lo][X hi][Y lo][Y hi]
 set -euo pipefail
 
@@ -16,9 +21,11 @@ CONFIGFS=/sys/kernel/config/usb_gadget
 NAME=${GADGET_NAME:-sinden}
 G=$CONFIGFS/$NAME
 UDC_NAME=${UDC_NAME:-$(ls /sys/class/udc | head -1)}
-VID=${SINDEN_VID:-0x16c0}
-PID=${SINDEN_PID:-0x0f01}          # 0f01 Blue P1, 0f02 Red, 0f38 Black/P1, 0f39 P2
-SERIAL=${SINDEN_SERIAL:-MISTERSINDEN01}
+STATE=/var/lib/mister-sinden/gadget-pid
+VID=0x16c0
+PID=${2:-$(cat "$STATE" 2>/dev/null || echo 0x0f01)}
+case "$PID" in 0x0f01|0x0f02|0x0f38|0x0f39) ;; *) PID=0x0f01 ;; esac
+SERIAL="MS$(cut -c1-10 /etc/machine-id 2>/dev/null || echo 0000000000)"     # unique per Cubie
 
 REPORT_DESC='05 01 09 04 A1 01
              05 09 19 01 29 10 15 00 25 01 75 01 95 10 81 02
@@ -44,6 +51,11 @@ up() {
             echo "" > "$other/UDC" || true
         fi
     done
+    if [ -d "$G" ] && [ "$(cat "$G/idProduct")" != "$PID" ]; then
+        log "gun changed: USB ID $(cat "$G/idProduct") -> $PID"
+        down
+    fi
+    mkdir -p "$(dirname "$STATE")" && echo "$PID" > "$STATE"
     if [ -d "$G" ]; then
         log "gadget exists; rebinding"
     else

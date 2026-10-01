@@ -18,6 +18,8 @@ Sinden (+ pedal) ── Cubie ── MiSTer ── RetroTINK 4K ── TV
 - A RetroTINK 4K, for the white border. Cores with their own Sinden border option (some arcade cores
   have one) don't need it.
 
+Two guns? Use one Cubie per gun, each with its own card, cable and adapter.
+
 The Cubie and gun run off the MiSTer's USB, so make sure your MiSTer's power supply has room for them
 alongside everything else you have plugged in.
 
@@ -47,19 +49,23 @@ alongside everything else you have plugged in.
 6. **Per core:** turn on the core's light gun option, then map the trigger (and the pedal, if you have
    one) in *Define buttons*, and save.
 
+With two guns, do steps 5 and 6 with each gun.
+
 ## Playing
 
 - **Press one of the gun's side buttons after loading a game.** That's what wakes the gun up in that game.
 - The pump reloads by firing off-screen.
 - Crosshair a little off? Press F10 and shoot the edges of the picture. Each core remembers its own.
-- If a game needs the gun as Player 1, add `player_1_controller=16c0_0f01` to `MiSTer.ini`.
+- To fix which gun is which player, add `player_1_controller=` (or `player_2_controller=`) and the
+  gun's ID to `MiSTer.ini`: `16c0_0f01` for a blue gun, `16c0_0f02` red, `16c0_0f38` black, `16c0_0f39`
+  for a gun set to player 2.
 
 ## Troubleshooting
 
 - **Gun does nothing:** press a side button, and check the core's light gun option is on and saved.
 - **Nothing works at all:** check the Cubie's two cables aren't swapped, then unplug it and plug it back in.
 
-Recoil Sindens and two-gun setups haven't been tried yet.
+Recoil Sindens haven't been tried yet, and neither has two guns.
 
 The Sinden driver comes from sindenlightgun.com (the installer downloads it), and the Cubie image is by
 [cuihuir](https://github.com/cuihuir/radxa-a7z-debian12). The nerdy details are in [docs/](docs/development.md).

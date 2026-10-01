@@ -40,7 +40,7 @@ re-presents the gun's HID output to the MiSTer as a Sinden-in-joystick-mode devi
                  │   [1] sinden driver ── camera → aim → serial write to gun ──▶ gun │
                  │   [2] hid-bridge   ── gun evdev → normalize → /dev/hidg0          │
                  │                                                                  │
-                 │ USB 2.0 OTG port (sunxi UDC, VID 16c0 PID 0f01, 1 HID interface) │
+                 │ USB 2.0 OTG port (sunxi UDC, the gun's own 16c0:0fxx, 1 HID iface)│
                  └────────────────────────────┬─────────────────────────────────────┘
                                               │ USB
                                               ▼
@@ -101,9 +101,35 @@ attaches a pedal. The vendor Linux driver ignores the pedal's serial port when l
 ### Hot-plug
 
 The bridge exits when a gun node vanishes and systemd restarts it into its wait loop. The vendor
-driver does not: it logs "Exit Lightgun1" and lingers, so `bridge/udev/99-sinden-bridge.rules`
-restarts `sinden-driver.service` on every add/remove of a Sinden gun (matched on udev's
-`PRODUCT=16c0/<pid>/…`, which is present on remove events too).
+driver needs help: it only looks for guns when it starts, and after its gun is unplugged it logs
+"Exit Lightgun1" and lingers. Restarting it on every udev event is harmful, though: a re-plug
+produces several events, and killing the driver mid-handshake can upset a gun and make it
+re-enumerate, which produces more events. So the udev rule only starts `sinden-hotplug.service`,
+a oneshot that waits three seconds (further starts while it waits are no-ops) and then restarts
+the driver only if the set of attached guns (`bridge/hotplug/sinden-guns.sh list`, USB port plus
+device number) differs from the set recorded when the driver last started.
+
+### Two guns
+
+One Cubie per gun. The gadget copies the USB ID of the gun plugged into the Cubie (16c0:0f01 blue,
+0f02 red, 0f38 black, 0f39 "player 2"; `sinden-gadget.sh up <pid>`, called by the bridge and
+remembered in `/var/lib/mister-sinden/gadget-pid`), so two Cubies look to the MiSTer like two real
+Sindens: separate devices, separate maps and calibration per ID, players pinned with
+`player_N_controller=16c0_<pid>` if wanted.
+
+Two guns on one Cubie was built and abandoned (branch `two-guns-one-cubie`). Findings:
+
+- **Processing is fine**: the vendor driver runs two guns in one instance at about one core.
+- **USB bandwidth**: each Sinden camera uses isochronous alt 11 (3×1020 = 3060 bytes per
+  microframe, the high-speed maximum) at every MJPEG resolution. Two reserve ~80 % of the Cubie's
+  single USB 2.0 bus. A `uvcvideo` `bandwidth_cap` parameter (as in Batocera's kernel patch) brings
+  them down to alt 7 (1280 bytes) with no loss of frame rate.
+- **Power is the blocker**: the Cubie's 5 V rail is fed through one MiSTer USB port and is shared
+  with the host port the guns hang off. When the CPU load steps up the rail dips and both guns
+  disconnect within ~300 ms (reproduced with the driver stopped: cameras streaming, then an
+  8-core load; no drop with the CPU capped at ~1 GHz). One gun has enough margin. Two would need
+  a powered hub for the guns, which was not tested.
+- Both CPU clusters start throttling at 60 °C; without a heatsink the board idles at 57–65 °C.
 
 ### Why one HID interface, joystick class
 
@@ -116,20 +142,20 @@ Everything therefore goes on one joystick collection with buttons ≥ 0x120.
 
 ### MiSTer-side requirements (unmodified cores)
 
-- `player_1_controller=16c0_0f01` in `MiSTer.ini` pins the gun to Player 1 whenever it is pressed
+- `player_1_controller=16c0_0f38` (the gun's ID) in `MiSTer.ini` pins the gun to Player 1 whenever it is pressed
   (a pad pressed first shares Player 1 rather than displacing the gun). Main re-reads the ini on
   every core load (`cfg_parse()`), so ini edits need only a core reload; `debug=2` writes Main's
   log unbuffered to `/tmp/debug.txt` ("Device … assigned to player N").
 
 - Main_MiSTer ≥ Feb 2025 (has the Sinden quirk). Nothing to patch.
 - A top-level button map so the device gets a player slot: Main only assigns a player number when
-  a button in the device's global map (`input_16c0_0f01_v3.map`, written by the main menu's
-  "Define joystick buttons") is pressed. Per-core maps (`<core>_input_16c0_0f01_v3.map`) come from
+  a button in the device's global map (`input_16c0_<pid>_v3.map`, written by the main menu's
+  "Define joystick buttons") is pressed. Per-core maps (`<core>_input_16c0_<pid>_v3.map`) come from
   each core's "Define buttons". Users make both through the menus; this repo ships no map files.
 - Core OSD: point the gun at Joy1 ("Zapper: Joy1" etc.). Off-screen is inferred by cores from
   edge coordinates (NES x≤1/≥254, y≤8/≥224; PSX X or Y == 0 or 255), so the bridge must
   emit true 0 / 65535 at the edges.
-- Calibration: optional per core via F10 (stored as `<core>_gun_cal_16c0_0f01_v2.cfg`). The
+- Calibration: optional per core via F10 (stored as `<core>_gun_cal_16c0_<pid>_v2.cfg`). The
   Sinden itself calibrates to the border, so this should rarely be needed.
 
 ### RetroTINK 4K border

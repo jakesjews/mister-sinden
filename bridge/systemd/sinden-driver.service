@@ -5,8 +5,10 @@ After=multi-user.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/sinden
+ExecStartPre=/opt/mister-sinden/bridge/hotplug/sinden-guns.sh record
 ExecStart=/usr/bin/mono /opt/sinden/LightgunMono.exe
-# The driver exits when no gun is attached ("E1"); keep retrying so hot-plug just works.
+# The driver exits when no gun is attached ("E1"); keep retrying so a first gun is picked up.
+# Later changes are handled by sinden-hotplug.service.
 Restart=always
 RestartSec=3
 Nice=-10

@@ -2,8 +2,12 @@
 """evdev → USB HID gadget bridge for a Sinden Lightgun.
 
 Reads the gun's own input nodes (created by usbhid when the gun is plugged into the Cubie),
-normalises them into a single joystick report and writes it to the HID gadget function
-(/dev/hidg0) that the MiSTer sees. See docs/architecture.md.
+normalises them into a joystick report and writes it to the HID gadget function (/dev/hidg0)
+that the MiSTer sees. See docs/architecture.md.
+
+One gun per Cubie. The gadget takes the gun's own USB ID (16c0:0f01 blue, 0f02 red, 0f38 black,
+0f39 "player 2"), so the MiSTer sees that gun and two Cubies look like two different Sindens.
+If two guns are plugged into one Cubie only the first is used.
 
 Report layout (must match bridge/gadget/sinden-gadget.sh): 6 bytes little-endian
     u16 buttons   bit n-1 = Button n  (Linux maps to BTN_TRIGGER + n-1 on the MiSTer)
@@ -31,6 +35,7 @@ import os
 import select
 import socketserver
 import struct
+import subprocess
 import sys
 import termios
 import threading
@@ -64,18 +69,28 @@ MOUSE_MODE_BUTTONS = {
 # Joystick-mode node: BTN_TRIGGER (0x120) is Button 1, etc. — pass straight through.
 
 
-def find_gun_devices(prefix=GUN_NAME_PREFIX):
-    devs = []
+SINDEN_PIDS = {0x0f01, 0x0f02, 0x0f38, 0x0f39}     # blue, red, black, "player 2"
+GADGET_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gadget", "sinden-gadget.sh")
+
+
+def usb_key(dev):
+    """The USB device an input node belongs to, e.g. 'usb-xhci-hcd.41.auto-1.2.2' (phys minus '/inputN')."""
+    return (dev.phys or dev.path).rsplit("/input", 1)[0]
+
+
+def find_guns(prefix=GUN_NAME_PREFIX):
+    """All Sinden gun input nodes, grouped per gun, ordered by USB port."""
+    groups = {}
     for path in evdev.list_devices():
         try:
             d = evdev.InputDevice(path)
         except OSError:
             continue
         if d.name.startswith(prefix):
-            devs.append(d)
+            groups.setdefault(usb_key(d), []).append(d)
         else:
             d.close()
-    return devs
+    return sorted(groups.items())
 
 
 PEDAL_NAME_HINTS = ("pedal",)          # matched case-insensitively against the evdev device name
@@ -83,8 +98,9 @@ PEDAL_IDS = {(0x16d0, 0x1094)}         # "Sinden Technology Ltd Sinden Pedal" (m
 PEDAL_VIDS = (0x16c0, 0x16d0, 0x2341)  # Sinden / Arduino-Leonardo style boards
 
 
-def find_pedal_device(exclude_paths):
-    """The Sinden pedal enumerates as a USB keyboard; find it by name, else by VID + keyboard shape."""
+def find_pedal_devices(exclude_paths):
+    """Sinden pedals enumerate as USB keyboards; find them by ID or name, else by VID + keyboard shape."""
+    found = []
     for path in evdev.list_devices():
         if path in exclude_paths:
             continue
@@ -97,9 +113,10 @@ def find_pedal_device(exclude_paths):
         looks_like_kbd = E.KEY_C in keys and E.BTN_LEFT not in keys and E.ABS_X not in dict(d.capabilities().get(E.EV_ABS, []))
         if ((d.info.vendor, d.info.product) in PEDAL_IDS or any(h in name for h in PEDAL_NAME_HINTS)
                 or (d.info.vendor in PEDAL_VIDS and looks_like_kbd and "sinden" not in name)):
-            return d
-        d.close()
-    return None
+            found.append(d)
+        else:
+            d.close()
+    return sorted(found, key=usb_key)
 
 
 def pedal_keyboard_mode():
@@ -126,20 +143,6 @@ def pedal_keyboard_mode():
                 os.close(fd)
         except OSError as e:
             log.warning("could not set pedal keyboard mode via %s: %s", tty, e)
-
-
-class Report:
-    __slots__ = ("buttons", "x", "y", "dirty", "last_buttons")
-
-    def __init__(self):
-        self.buttons = 0
-        self.x = 32767
-        self.y = 32767
-        self.dirty = True
-        self.last_buttons = 0
-
-    def pack(self):
-        return struct.pack("<HHH", self.buttons, self.x, self.y)
 
 
 class PositionFeed:
@@ -209,6 +212,128 @@ class AxisScaler:
         return (v - self.lo) * 65535 // self.span
 
 
+TRIGGER_BIT, PUMP_BIT = 1 << 0, 1 << 9
+OFFSCREEN = (0, 0)
+
+
+class Gun:
+    """One physical gun: its input nodes in, one HID gadget function out."""
+
+    def __init__(self, key, nodes, hidg_path, args, feed):
+        self.key, self.nodes, self.args, self.feed = key, nodes, args, feed
+        self.buttons, self.x, self.y = 0, 32767, 32767     # physical state: real aim + real buttons
+        self.dirty, self.last_buttons, self.pump_held = True, 0, False
+        self.last_sent, self.host_ok = 0.0, None            # host_ok: None unknown, True flowing, False no host
+        self.hidg_path = hidg_path
+        self.hidg = None if args.dry_run else os.open(hidg_path, os.O_WRONLY | os.O_NONBLOCK)
+        self.scalers, self.joystick_node = {}, None
+        for d in nodes:
+            caps = d.capabilities(absinfo=True)
+            abs_caps = dict(caps.get(E.EV_ABS, []))
+            keys = set(caps.get(E.EV_KEY, []))
+            if E.ABS_X in abs_caps and E.ABS_Y in abs_caps:
+                self.scalers[d.fd] = (AxisScaler(abs_caps[E.ABS_X]), AxisScaler(abs_caps[E.ABS_Y]))
+            if E.BTN_TRIGGER in keys or E.BTN_JOYSTICK in keys:
+                self.joystick_node = d
+            try:
+                d.grab()          # keep the gun from also acting as a mouse/keyboard on the Cubie
+            except OSError as e:
+                log.warning("grab %s failed: %s", d.path, e)
+        # Take aim from exactly one node: the gun's mouse node, where the driver sends positions. A gun
+        # with joystick mode switched on in its firmware also exposes a joystick node with its own axes;
+        # reading both could make the aim jump. Use the joystick node only if there is no mouse node.
+        aim = [d for d in nodes if d.fd in self.scalers and d is not self.joystick_node]
+        j = self.joystick_node
+        self.aim_fd = aim[0].fd if aim else (j.fd if j is not None and j.fd in self.scalers else None)
+        log.info("gun %s (16c0:%04x) nodes=%s aim from %s → %s", key, nodes[0].info.product,
+                 [d.path for d in nodes], next((d.path for d in nodes if d.fd == self.aim_fd), "nothing"),
+                 hidg_path if self.hidg is not None else "(dry run)")
+
+    def emit(self, buttons, x, y):
+        if self.hidg is None:
+            log.info("report btn=%04x x=%5d y=%5d", buttons, x, y)
+        else:
+            try:
+                os.write(self.hidg, struct.pack("<HHH", buttons, x, y))
+                if self.host_ok is not True:
+                    log.info("host is polling the gadget; reports flowing")
+                    self.host_ok = True
+            except BlockingIOError:
+                log.debug("hidg not ready (host not polling yet)")
+            except OSError as e:
+                # ESHUTDOWN (108) = gadget not connected to a host; log the transition only
+                if self.host_ok is not False:
+                    log.warning("no USB host on the gadget (%s); reports dropped until one appears", e)
+                    self.host_ok = False
+        if self.feed:
+            self.feed.publish(buttons, x, y)
+        self.last_sent = time.monotonic()
+
+    def flush(self):
+        """Send the current logical state (real aim, or the off-screen shot while the pump is held)."""
+        if self.pump_held:
+            self.emit((self.buttons | TRIGGER_BIT) & ~PUMP_BIT, *OFFSCREEN)
+        else:
+            self.emit(self.buttons, self.x, self.y)
+        self.dirty = False
+        self.last_buttons = self.buttons
+
+    def offscreen_shot(self, pressed):
+        """Off-screen first, then the trigger edge one report later, so the core latches the off-screen
+        position before it sees the press; on release drop the trigger off-screen, then restore the aim."""
+        if pressed:
+            self.pump_held = True
+        self.emit(self.buttons & ~TRIGGER_BIT & ~PUMP_BIT, *OFFSCREEN)
+        if not pressed:
+            self.pump_held = False
+        time.sleep(0.012)
+        self.flush()
+
+    def pedal(self, pressed, mode, bit):
+        if mode == "offscreen":
+            self.offscreen_shot(pressed)
+            return
+        if mode == "trigger":
+            bit = TRIGGER_BIT
+        new = (self.buttons | bit) if pressed else (self.buttons & ~bit)
+        if new != self.buttons:
+            self.buttons = new
+            self.flush()
+
+    def handle(self, d, events, min_interval):
+        fd = d.fd
+        for ev in events:
+            if ev.type == E.EV_ABS and fd == self.aim_fd:
+                if ev.code == E.ABS_X:
+                    v = self.scalers[fd][0](ev.value)
+                    if v != self.x:
+                        self.x, self.dirty = v, True
+                elif ev.code == E.ABS_Y:
+                    v = self.scalers[fd][1](ev.value)
+                    if v != self.y:
+                        self.y, self.dirty = v, True
+            elif ev.type == E.EV_KEY and ev.value in (0, 1):
+                if d is self.joystick_node and E.BTN_JOYSTICK <= ev.code < E.BTN_JOYSTICK + 16:
+                    n = ev.code - E.BTN_JOYSTICK + 1
+                else:
+                    n = MOUSE_MODE_BUTTONS.get(ev.code)
+                if n is None:
+                    log.debug("unmapped key %s=%d", E.KEY.get(ev.code, ev.code), ev.value)
+                    continue
+                bit = 1 << (n - 1)
+                new = (self.buttons | bit) if ev.value else (self.buttons & ~bit)
+                if new == self.buttons:
+                    continue
+                self.buttons, self.dirty = new, True
+                if self.args.pump_offscreen_shot and bit == PUMP_BIT:
+                    self.offscreen_shot(bool(ev.value))
+            elif ev.type == E.EV_SYN and self.dirty:
+                # rate-limit pure motion; button changes always go out immediately
+                if min_interval and time.monotonic() - self.last_sent < min_interval and self.buttons == self.last_buttons:
+                    continue
+                self.flush()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--hidg", default="/dev/hidg0")
@@ -227,49 +352,6 @@ def main():
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
 
-    while True:
-        devs = find_gun_devices()
-        if devs:
-            break
-        log.info("waiting for %s* input devices", GUN_NAME_PREFIX)
-        time.sleep(2)
-
-    scalers = {}
-    joystick_node = None
-    for d in devs:
-        caps = d.capabilities(absinfo=True)
-        abs_caps = dict(caps.get(E.EV_ABS, []))
-        keys = set(caps.get(E.EV_KEY, []))
-        if E.ABS_X in abs_caps and E.ABS_Y in abs_caps:
-            scalers[d.fd] = (AxisScaler(abs_caps[E.ABS_X]), AxisScaler(abs_caps[E.ABS_Y]))
-        if E.BTN_TRIGGER in keys or E.BTN_JOYSTICK in keys:
-            joystick_node = d
-        log.info("gun node %s '%s' abs=%s keys=%d%s", d.path, d.name,
-                 {E.ABS[c]: (a.min, a.max) for c, a in abs_caps.items() if c in (E.ABS_X, E.ABS_Y)},
-                 len(keys), "  [joystick mode]" if d is joystick_node else "")
-        try:
-            d.grab()          # keep the gun from also acting as a mouse/keyboard on the Cubie
-        except OSError as e:
-            log.warning("grab %s failed: %s", d.path, e)
-
-    # Take aim from exactly one node: the gun's mouse node, where the driver sends positions. A gun with
-    # joystick mode switched on in its firmware also exposes a joystick node with its own axes; reading
-    # both could make the aim jump between them. Use the joystick node only if there is no mouse node.
-    aim = [d for d in devs if d.fd in scalers and d is not joystick_node]
-    aim_fd = aim[0].fd if aim else (joystick_node.fd if joystick_node is not None and joystick_node.fd in scalers else None)
-    log.info("aim from %s", next((d.path for d in devs if d.fd == aim_fd), "nothing (no absolute axes found)"))
-
-    hidg = None if args.dry_run else os.open(args.hidg, os.O_WRONLY | os.O_NONBLOCK)
-    feed = PositionFeed(args.sse_port) if args.sse_port else None
-    rep = Report()                       # physical state: real aim + real buttons
-    fds = {d.fd: d for d in devs}
-    min_interval = 1.0 / args.rate if args.rate > 0 else 0.0
-    st = {"last_sent": 0.0, "sent": 0, "host_ok": None}   # None unknown, True writes succeed, False no host
-    pump_held = False
-    TRIGGER_BIT, PUMP_BIT = 1 << 0, 1 << 9
-    OFFSCREEN = (0, 0)
-
-    # optional pedal: its key becomes a joystick button, the trigger, or an off-screen shot
     pedal_key = getattr(E, args.pedal_key)
     pedal_mode, pedal_bit = args.pedal_as, 0
     if pedal_mode.startswith("button:"):
@@ -277,153 +359,97 @@ def main():
         pedal_mode = "button"
     elif pedal_mode not in ("trigger", "offscreen"):
         ap.error("--pedal-as must be button:N, trigger or offscreen")
-    pedal = None
-    pedal_next_scan = 0.0
-    gun_paths = {d.path for d in devs}
 
-    def emit(buttons, x, y):
-        data = struct.pack("<HHH", buttons, x, y)
-        if hidg is None:
-            log.info("report btn=%04x x=%5d y=%5d", buttons, x, y)
-        else:
+    while True:
+        found = find_guns()
+        if found:
+            break
+        log.info("waiting for %s* input devices", GUN_NAME_PREFIX)
+        time.sleep(2)
+    time.sleep(1.0)                      # a gun's nodes appear one after another; let the set settle
+    for _, nodes in found:
+        for d in nodes:
+            d.close()
+    found = find_guns()
+    if not found:
+        return 1
+    if len(found) > 1:
+        log.warning("%d guns are plugged into this Cubie; using the first. Use one Cubie per gun.", len(found))
+        for _, nodes in found[1:]:
+            for d in nodes:
+                d.close()
+        found = found[:1]
+
+    # Present the gadget with the gun's own USB ID (no-op when it already has it).
+    pid = found[0][1][0].info.product
+    if not args.dry_run and pid in SINDEN_PIDS:
+        r = subprocess.run([GADGET_SCRIPT, "up", f"0x{pid:04x}"], capture_output=True, text=True)
+        if r.returncode != 0:
+            log.error("gadget setup failed: %s", (r.stderr or r.stdout).strip())
+            return 1
+    for _ in range(20):                  # the gadget's device node appears shortly after binding
+        if args.dry_run or os.path.exists(args.hidg):
+            break
+        time.sleep(0.25)
+    else:
+        log.error("no HID gadget device %s; is sinden-gadget up?", args.hidg)
+        return 1
+
+    feed = PositionFeed(args.sse_port) if args.sse_port else None
+    gun = Gun(found[0][0], found[0][1], args.hidg, args, feed)
+    fds = {d.fd: d for d in gun.nodes}
+    gun_paths = {d.path for d in gun.nodes}
+    min_interval = 1.0 / args.rate if args.rate > 0 else 0.0
+
+    pedals = {}                          # fd → pedal device
+    next_scan = 0.0
+
+    def scan_pedals():
+        have = {d.path for d in pedals.values()}
+        new = False
+        for d in find_pedal_devices(gun_paths | have):
             try:
-                os.write(hidg, data)
-                if st["host_ok"] is not True:
-                    log.info("host is polling the gadget; reports flowing")
-                    st["host_ok"] = True
-            except BlockingIOError:
-                log.debug("hidg not ready (host not polling yet)")
+                d.grab()
             except OSError as e:
-                # ESHUTDOWN (108) = gadget not connected to a host; log the transition only
-                if st["host_ok"] is not False:
-                    log.warning("no USB host on the gadget (%s); reports dropped until one appears", e)
-                    st["host_ok"] = False
-        if feed:
-            feed.publish(buttons, x, y)
-        st["last_sent"] = time.monotonic()
-        st["sent"] += 1
-        if args.verbose and st["sent"] % 600 == 0:
-            log.debug("%d reports sent", st["sent"])
+                log.warning("grab pedal %s failed: %s", d.path, e)
+            pedals[d.fd] = d
+            new = True
+            log.info("pedal %s '%s' (%04x:%04x) → %s", d.path, d.name, d.info.vendor, d.info.product, args.pedal_as)
+        if new:
+            pedal_keyboard_mode()
 
-    def flush():
-        """Send the current logical state (real aim, or the off-screen shot while the pump is held)."""
-        if pump_held:
-            emit((rep.buttons | TRIGGER_BIT) & ~PUMP_BIT, *OFFSCREEN)
-        else:
-            emit(rep.buttons, rep.x, rep.y)
-        rep.dirty = False
-        rep.last_buttons = rep.buttons
-
-    def attach_pedal():
-        nonlocal pedal, pedal_next_scan
-        pedal_next_scan = time.monotonic() + 3.0
-        d = find_pedal_device(gun_paths)
-        if d is None:
-            return
-        try:
-            d.grab()
-        except OSError as e:
-            log.warning("grab pedal %s failed: %s", d.path, e)
-        pedal = d
-        fds[d.fd] = d
-        pedal_keyboard_mode()
-        log.info("pedal %s '%s' (%04x:%04x) → %s", d.path, d.name, d.info.vendor, d.info.product, args.pedal_as)
-
-    def detach_pedal():
-        nonlocal pedal
-        if pedal is None:
-            return
-        fds.pop(pedal.fd, None)
-        try:
-            pedal.close()
-        except OSError:
-            pass
-        log.info("pedal went away")
-        pedal = None
-
-    attach_pedal()
-    log.info("bridging %d node(s) → %s%s", len(devs), args.hidg if hidg is not None else "(dry run)",
+    log.info("bridging 16c0:%04x → %s%s", pid, args.hidg if not args.dry_run else "(dry run)",
              "  [pump = off-screen shot]" if args.pump_offscreen_shot else "")
     while True:
-        if pedal is None and time.monotonic() >= pedal_next_scan:
-            attach_pedal()
-        ready, _, _ = select.select(list(fds), [], [], 1.0)
+        now = time.monotonic()
+        if now >= next_scan:
+            next_scan = now + 3.0
+            scan_pedals()
+        ready, _, _ = select.select(list(fds) + list(pedals), [], [], 1.0)
         for fd in ready:
-            d = fds.get(fd)
-            if d is None:
+            if fd in pedals:
+                d = pedals[fd]
+                try:
+                    events = list(d.read())
+                except OSError:
+                    pedals.pop(fd, None)
+                    try:
+                        d.close()
+                    except OSError:
+                        pass
+                    log.info("pedal %s went away", d.path)
+                    continue
+                for ev in events:
+                    if ev.type == E.EV_KEY and ev.code == pedal_key and ev.value in (0, 1):
+                        gun.pedal(bool(ev.value), pedal_mode, pedal_bit)
                 continue
+            d = fds[fd]
             try:
                 events = list(d.read())
             except OSError as e:
-                if d is pedal:
-                    detach_pedal()
-                    continue
                 log.error("gun node %s went away (%s); exiting for restart", d.path, e)
                 return 1
-            if d is pedal:
-                for ev in events:
-                    if ev.type != E.EV_KEY or ev.code != pedal_key or ev.value not in (0, 1):
-                        continue
-                    if pedal_mode == "button":
-                        new = (rep.buttons | pedal_bit) if ev.value else (rep.buttons & ~pedal_bit)
-                    elif pedal_mode == "trigger":
-                        new = (rep.buttons | TRIGGER_BIT) if ev.value else (rep.buttons & ~TRIGGER_BIT)
-                    else:   # offscreen: same choreography as the pump
-                        if ev.value:
-                            pump_held = True
-                            emit(rep.buttons & ~TRIGGER_BIT & ~PUMP_BIT, *OFFSCREEN)
-                            time.sleep(0.012)
-                        else:
-                            emit(rep.buttons & ~TRIGGER_BIT & ~PUMP_BIT, *OFFSCREEN)
-                            pump_held = False
-                            time.sleep(0.012)
-                        flush()
-                        continue
-                    if new != rep.buttons:
-                        rep.buttons = new
-                        flush()
-                continue
-            for ev in events:
-                if ev.type == E.EV_ABS and fd == aim_fd:
-                    if ev.code == E.ABS_X:
-                        v = scalers[fd][0](ev.value)
-                        if v != rep.x:
-                            rep.x, rep.dirty = v, True
-                    elif ev.code == E.ABS_Y:
-                        v = scalers[fd][1](ev.value)
-                        if v != rep.y:
-                            rep.y, rep.dirty = v, True
-                elif ev.type == E.EV_KEY and ev.value in (0, 1):
-                    if d is joystick_node and E.BTN_JOYSTICK <= ev.code < E.BTN_JOYSTICK + 16:
-                        n = ev.code - E.BTN_JOYSTICK + 1
-                    else:
-                        n = MOUSE_MODE_BUTTONS.get(ev.code)
-                    if n is None:
-                        log.debug("unmapped key %s=%d", E.KEY.get(ev.code, ev.code), ev.value)
-                        continue
-                    bit = 1 << (n - 1)
-                    new = (rep.buttons | bit) if ev.value else (rep.buttons & ~bit)
-                    if new == rep.buttons:
-                        continue
-                    rep.buttons, rep.dirty = new, True
-                    if args.pump_offscreen_shot and bit == PUMP_BIT:
-                        if ev.value:
-                            # off-screen first, then the trigger edge one report later, so the core
-                            # latches the off-screen position before it sees the press
-                            pump_held = True
-                            emit(rep.buttons & ~TRIGGER_BIT & ~PUMP_BIT, *OFFSCREEN)
-                            time.sleep(0.012)
-                            flush()
-                        else:
-                            emit(rep.buttons & ~TRIGGER_BIT & ~PUMP_BIT, *OFFSCREEN)   # release the shot off-screen
-                            pump_held = False
-                            time.sleep(0.012)
-                            flush()                                                 # back to the real aim
-                elif ev.type == E.EV_SYN and rep.dirty:
-                    # rate-limit pure motion; button changes always go out immediately
-                    if min_interval and time.monotonic() - st["last_sent"] < min_interval and rep.buttons == rep.last_buttons:
-                        continue
-                    flush()
+            gun.handle(d, events, min_interval)
 
 
 if __name__ == "__main__":

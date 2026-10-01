@@ -1,0 +1,9 @@
+[Unit]
+Description=Restart the Sinden driver when the set of attached guns has changed
+After=sinden-driver.service
+
+[Service]
+Type=oneshot
+# Started by udev on every gun add/remove. While it is waiting for the bus to settle, further
+# start requests are no-ops, so a burst of events becomes at most one driver restart.
+ExecStart=/opt/mister-sinden/bridge/hotplug/sinden-guns.sh settle

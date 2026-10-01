@@ -8,12 +8,13 @@ for verified board facts.
 ```
 install.sh                       one-command Cubie installer (packages, Sinden driver download, services)
 bridge/install.sh                deploys this checkout to /opt/mister-sinden and (re)starts the services
-bridge/gadget/sinden-gadget.sh   configfs USB gadget: VID 16c0 PID 0f01, one joystick HID
+bridge/gadget/sinden-gadget.sh   configfs USB gadget: one joystick HID, USB ID copied from the gun (16c0:0f01/0f02/0f38/0f39)
 bridge/hid-bridge/hid_bridge.py  gun evdev → /dev/hidg0 translator (+ SSE position feed, pump = off-screen
                                  shot, pedal merged as button 11)
 bridge/driver/                   managed LightgunMono.exe.config (unique key per gun button)
 bridge/systemd/*.service         gadget / driver / bridge units
-bridge/udev/99-sinden-bridge.rules  restart the driver when a gun is plugged/unplugged
+bridge/hotplug/sinden-guns.sh    tracks which guns are attached; restarts the driver only when that set changed
+bridge/udev/99-sinden-bridge.rules  gun plugged/unplugged → sinden-hotplug.service (debounced)
 tools/border-target.html         bench target: white border + crosshairs, live aim from the feed
 tools/sinden-pedal.py            pedal serial tool: status / keyboard / attached / poll / set-key / set-id
 tools/calibrate-offsets.py       four-corner calibration → driver OffsetX/Y values
@@ -35,7 +36,7 @@ and restart the service. The page is then at `http://<cubie>:8765/`.
 
 ## Status
 
-- [x] Cubie: USB gadget presents the bridge to the MiSTer as a Sinden (`16c0:0f01`) joystick
+- [x] Cubie: USB gadget presents the bridge to the MiSTer as a Sinden joystick with the attached gun's own USB ID
 - [x] Sinden's own aarch64 driver (V2.08b "Pi5" build) runs under Mono on the Cubie
 - [x] Tracking verified against a white-bordered screen; aim within ~2–3 % at centre and corners
 - [x] Boot- and hot-plug-persistent (systemd units + udev driver restart)
@@ -45,5 +46,6 @@ and restart the service. The page is then at `http://<cubie>:8765/`.
 - [x] One-command installer, verified by re-running on an installed Cubie (Debian 12 image v0.3.3)
 - [ ] Installer run on a freshly flashed card (clone-from-GitHub path)
 - [ ] SNES, SMS, Atari 7800 cores checked
-- [ ] Recoil guns, second gun
+- [ ] Two guns, one Cubie each (built, not yet tried)
+- [ ] Recoil guns
 - [ ] Native driver (sindenrs) replacing Mono
