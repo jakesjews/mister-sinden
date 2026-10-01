@@ -91,10 +91,10 @@ up() {
 down() {
     [ -d "$G" ] || { log "no gadget"; return 0; }
     echo "" > "$G/UDC" 2>/dev/null || true
-    rm -f "$G/configs/c.1/hid.usb0"
-    rmdir "$G/configs/c.1/strings/0x409" "$G/configs/c.1" "$G/functions/hid.usb0" \
-          "$G/strings/0x409" "$G" 2>/dev/null || true
-    log "removed"
+    # remove whatever is there (an older version of this script made two functions)
+    find "$G/configs" -maxdepth 2 -type l -exec rm -f {} + 2>/dev/null || true
+    rmdir "$G"/configs/*/strings/* "$G"/configs/* "$G"/functions/* "$G"/strings/* 2>/dev/null || true
+    if rmdir "$G" 2>/dev/null; then log "removed"; else log "could not fully remove the gadget"; return 1; fi
 }
 
 status() {
