@@ -114,8 +114,8 @@ device number) differs from the set recorded when the driver last started.
 One Cubie per gun. The gadget copies the USB ID of the gun plugged into the Cubie (16c0:0f01 blue,
 0f02 red, 0f38 black, 0f39 "player 2"; `sinden-gadget.sh up <pid>`, called by the bridge and
 remembered in `/var/lib/mister-sinden/gadget-pid`), so two Cubies look to the MiSTer like two real
-Sindens: separate devices, separate maps and calibration per ID, players pinned with
-`player_N_controller=16c0_<pid>` if wanted.
+Sindens: separate devices, with separate maps and calibration when their IDs differ. After a core
+loads, the first device to press a button from its global map takes the lowest free player.
 
 Two guns on one Cubie was built and abandoned (branch `two-guns-one-cubie`). Findings:
 
@@ -142,21 +142,18 @@ Everything therefore goes on one joystick collection with buttons ≥ 0x120.
 
 ### MiSTer-side requirements (unmodified cores)
 
-- `player_1_controller=16c0_0f38` (the gun's ID) in `MiSTer.ini` pins the gun to Player 1 whenever it is pressed
-  (a pad pressed first shares Player 1 rather than displacing the gun). Main re-reads the ini on
-  every core load (`cfg_parse()`), so ini edits need only a core reload; `debug=2` writes Main's
-  log unbuffered to `/tmp/debug.txt` ("Device … assigned to player N").
-
-- Main_MiSTer ≥ Feb 2025 (has the Sinden quirk). Nothing to patch.
+- Main_MiSTer ≥ Feb 2025 (has the Sinden quirk).
 - A top-level button map so the device gets a player slot: Main only assigns a player number when
   a button in the device's global map (`input_16c0_<pid>_v3.map`, written by the main menu's
   "Define joystick buttons") is pressed. Per-core maps (`<core>_input_16c0_<pid>_v3.map`) come from
-  each core's "Define buttons". Users make both through the menus; this repo ships no map files.
+  each core's "Define buttons". Users make both through the menus.
 - Core OSD: point the gun at Joy1 ("Zapper: Joy1" etc.). Off-screen is inferred by cores from
   edge coordinates (NES x≤1/≥254, y≤8/≥224; PSX X or Y == 0 or 255), so the bridge must
   emit true 0 / 65535 at the edges.
-- Calibration: optional per core via F10 (stored as `<core>_gun_cal_16c0_<pid>_v2.cfg`). The
-  Sinden itself calibrates to the border, so this should rarely be needed.
+- Calibration: per core via F10 (stored as `<core>_gun_cal_16c0_<pid>_v2.cfg`).
+- Debugging: `debug=2` in `MiSTer.ini` writes Main's log unbuffered to `/tmp/debug.txt`
+  ("Device … assigned to player N"). Main re-reads the ini on every core load (`cfg_parse()`), so
+  it needs only a core reload.
 
 ### RetroTINK 4K border
 

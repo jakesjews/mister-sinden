@@ -54,11 +54,9 @@ With two guns, do steps 5 and 6 with each gun.
 ## Playing
 
 - **Press one of the gun's side buttons after loading a game.** That's what wakes the gun up in that game.
+  The first gun or controller pressed is player 1, the next is player 2.
 - The pump reloads by firing off-screen.
 - Crosshair a little off? Press F10 and shoot the edges of the picture. Each core remembers its own.
-- To fix which gun is which player, add `player_1_controller=` (or `player_2_controller=`) and the
-  gun's ID to `MiSTer.ini`: `16c0_0f01` for a blue gun, `16c0_0f02` red, `16c0_0f38` black, `16c0_0f39`
-  for a gun set to player 2.
 
 ## Troubleshooting
 
