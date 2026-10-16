@@ -23,7 +23,8 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y -q --no-install-recommends \
     mono-complete libgdiplus libsdl2-2.0-0 libjpeg62-turbo \
-    python3 python3-evdev v4l-utils rsync unzip curl git ca-certificates
+    python3 python3-evdev v4l-utils rsync unzip curl git ca-certificates \
+    dkms build-essential
 
 say "Getting mister-sinden"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"

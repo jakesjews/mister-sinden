@@ -12,8 +12,6 @@ ExecStart=/usr/bin/mono /opt/sinden/LightgunMono.exe
 Restart=always
 RestartSec=3
 Nice=-10
-StandardOutput=append:/var/log/sinden-driver.log
-StandardError=append:/var/log/sinden-driver.log
 
 [Install]
 WantedBy=multi-user.target

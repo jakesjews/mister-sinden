@@ -8,13 +8,16 @@ for verified board facts.
 ```
 install.sh                       one-command Cubie installer (packages, Sinden driver download, services)
 bridge/install.sh                deploys this checkout to /opt/mister-sinden and (re)starts the services
-bridge/gadget/sinden-gadget.sh   configfs USB gadget: one joystick HID, USB ID copied from the gun (16c0:0f01/0f02/0f38/0f39)
-bridge/hid-bridge/hid_bridge.py  gun evdev → /dev/hidg0 translator (+ SSE position feed, pump = off-screen
-                                 shot, pedal merged as button 11)
+bridge/gadget/sinden-gadget.sh   configfs USB gadget: one joystick HID per gun (two), USB ID copied from gun 1
+                                 (16c0:0f01/0f02/0f38/0f39)
+bridge/hid-bridge/hid_bridge.py  gun evdev → /dev/hidg0, /dev/hidg1 translator (+ SSE position feed, pump =
+                                 off-screen shot, pedal merged as button 11)
 bridge/driver/                   managed LightgunMono.exe.config (unique key per gun button)
 bridge/systemd/*.service         gadget / driver / bridge units
 bridge/hotplug/sinden-guns.sh    tracks which guns are attached; restarts the driver only when that set changed
 bridge/udev/99-sinden-bridge.rules  gun plugged/unplugged → sinden-hotplug.service (debounced)
+bridge/uvcvideo-dkms/            camera driver with a bandwidth cap, built by the installer (two guns need it)
+bridge/journald/volatile.conf    system log kept in RAM (the Cubie loses power with the MiSTer)
 tools/border-target.html         bench target: white border + crosshairs, live aim from the feed
 tools/sinden-pedal.py            pedal serial tool: status / keyboard / attached / poll / set-key / set-id
 tools/calibrate-offsets.py       four-corner calibration → driver OffsetX/Y values
@@ -34,6 +37,13 @@ ExecStart=/usr/bin/python3 /opt/mister-sinden/bridge/hid-bridge/hid_bridge.py --
 
 and restart the service. The page is then at `http://<cubie>:8765/`.
 
+## Logs
+
+The system log is kept in RAM, so `journalctl -u sinden-driver -u sinden-bridge` covers the current
+boot only. To keep logs across reboots while debugging, remove
+`/etc/systemd/journald.conf.d/mister-sinden.conf` and restart `systemd-journald`; the next install
+puts it back.
+
 ## Status
 
 - [x] Cubie: USB gadget presents the bridge to the MiSTer as a Sinden joystick with the attached gun's own USB ID
@@ -44,8 +54,9 @@ and restart the service. The page is then at `http://<cubie>:8765/`.
 - [x] All 10 gun inputs as distinct joystick buttons; pump = off-screen shot (reload verified on Mega Drive)
 - [x] Sinden pedal through a hub on the Cubie, merged into the gun as button 11; mappable in core wizards
 - [x] One-command installer, verified by re-running on an installed Cubie (Debian 12 image v0.3.3)
+- [x] Installer run on a freshly flashed card from a checkout
 - [ ] Installer run on a freshly flashed card (clone-from-GitHub path)
 - [ ] SNES, SMS, Atari 7800 cores checked
-- [ ] Two guns, one Cubie each (built, not yet tried)
+- [x] Two guns on one Cubie through a powered hub (StarTech ST4300USB3V2); both played together in Terminator 2
 - [ ] Recoil guns
 - [ ] Native driver (sindenrs) replacing Mono

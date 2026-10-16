@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""evdev → USB HID gadget bridge for a Sinden Lightgun.
+"""evdev → USB HID gadget bridge for Sinden Lightguns (one or two).
 
-Reads the gun's own input nodes (created by usbhid when the gun is plugged into the Cubie),
-normalises them into a joystick report and writes it to the HID gadget function (/dev/hidg0)
-that the MiSTer sees. See docs/architecture.md.
+Reads each gun's own input nodes (created by usbhid when the gun is plugged into the Cubie),
+normalises them into a joystick report and writes it to that gun's HID gadget function
+(/dev/hidg0 for gun 1, /dev/hidg1 for gun 2), which the MiSTer sees as separate Sinden guns.
+See docs/architecture.md.
 
-One gun per Cubie. The gadget takes the gun's own USB ID (16c0:0f01 blue, 0f02 red, 0f38 black,
-0f39 "player 2"), so the MiSTer sees that gun and two Cubies look like two different Sindens.
-If two guns are plugged into one Cubie only the first is used.
+Which gun is which: a gun whose USB ID marks it as a player-2 gun (16c0:0f02 red, 16c0:0f39
+"Player 2") goes second; otherwise guns are ordered by the USB port they are plugged into. A
+single gun is always gun 1.
+
+The gadget takes gun 1's USB ID (16c0:0f01 blue, 0f02 red, 0f38 black, 0f39 "player 2"), so the
+MiSTer sees that gun. Both gadget interfaces share that ID.
 
 Report layout (must match bridge/gadget/sinden-gadget.sh): 6 bytes little-endian
     u16 buttons   bit n-1 = Button n  (Linux maps to BTN_TRIGGER + n-1 on the MiSTer)
@@ -19,7 +23,8 @@ Button numbering follows Sinden's shipped MiSTer .map files (evdev codes 0x120..
     6 up  7 down  8 left  9 right  10 pump-action
 
 A Sinden pedal (a USB keyboard that types 'c') plugged into the Cubie is folded in too:
---pedal-as button:11 (default) | trigger | offscreen. It is optional and hot-pluggable.
+--pedal-as button:11 (default) | trigger | offscreen. It is optional and hot-pluggable. The first
+pedal (by USB port) belongs to gun 1, a second pedal to gun 2.
 
 With --pump-offscreen-shot the pump action becomes an off-screen shot instead of a button:
 while it is pulled the report shows the top-left corner (off-screen for every core's detector)
@@ -70,6 +75,8 @@ MOUSE_MODE_BUTTONS = {
 
 
 SINDEN_PIDS = {0x0f01, 0x0f02, 0x0f38, 0x0f39}     # blue, red, black, "player 2"
+PLAYER2_PIDS = {0x0f02, 0x0f39}       # red, "Player 2": these guns go second
+MAX_GUNS = 2
 GADGET_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gadget", "sinden-gadget.sh")
 
 
@@ -79,7 +86,7 @@ def usb_key(dev):
 
 
 def find_guns(prefix=GUN_NAME_PREFIX):
-    """All Sinden gun input nodes, grouped per gun, ordered by USB port."""
+    """All Sinden gun input nodes, grouped per gun and ordered into player slots."""
     groups = {}
     for path in evdev.list_devices():
         try:
@@ -90,7 +97,22 @@ def find_guns(prefix=GUN_NAME_PREFIX):
             groups.setdefault(usb_key(d), []).append(d)
         else:
             d.close()
-    return sorted(groups.items())
+    ordered = sorted(groups.items(), key=lambda kv: (kv[1][0].info.product in PLAYER2_PIDS, kv[0]))
+    return ordered
+
+
+def gun_keys(prefix=GUN_NAME_PREFIX):
+    """Just the set of attached guns (cheap enough to poll), to notice a gun being added."""
+    keys = set()
+    for path in evdev.list_devices():
+        try:
+            d = evdev.InputDevice(path)
+        except OSError:
+            continue
+        if d.name.startswith(prefix):
+            keys.add(usb_key(d))
+        d.close()
+    return keys
 
 
 PEDAL_NAME_HINTS = ("pedal",)          # matched case-insensitively against the evdev device name
@@ -219,8 +241,8 @@ OFFSCREEN = (0, 0)
 class Gun:
     """One physical gun: its input nodes in, one HID gadget function out."""
 
-    def __init__(self, key, nodes, hidg_path, args, feed):
-        self.key, self.nodes, self.args, self.feed = key, nodes, args, feed
+    def __init__(self, slot, key, nodes, hidg_path, args, feed):
+        self.slot, self.key, self.nodes, self.args, self.feed = slot, key, nodes, args, feed
         self.buttons, self.x, self.y = 0, 32767, 32767     # physical state: real aim + real buttons
         self.dirty, self.last_buttons, self.pump_held = True, 0, False
         self.last_sent, self.host_ok = 0.0, None            # host_ok: None unknown, True flowing, False no host
@@ -245,27 +267,27 @@ class Gun:
         aim = [d for d in nodes if d.fd in self.scalers and d is not self.joystick_node]
         j = self.joystick_node
         self.aim_fd = aim[0].fd if aim else (j.fd if j is not None and j.fd in self.scalers else None)
-        log.info("gun %s (16c0:%04x) nodes=%s aim from %s → %s", key, nodes[0].info.product,
+        log.info("gun %d: %s (16c0:%04x) nodes=%s aim from %s → %s", slot, key, nodes[0].info.product,
                  [d.path for d in nodes], next((d.path for d in nodes if d.fd == self.aim_fd), "nothing"),
                  hidg_path if self.hidg is not None else "(dry run)")
 
     def emit(self, buttons, x, y):
         if self.hidg is None:
-            log.info("report btn=%04x x=%5d y=%5d", buttons, x, y)
+            log.info("gun %d report btn=%04x x=%5d y=%5d", self.slot, buttons, x, y)
         else:
             try:
                 os.write(self.hidg, struct.pack("<HHH", buttons, x, y))
                 if self.host_ok is not True:
-                    log.info("host is polling the gadget; reports flowing")
+                    log.info("gun %d: host is polling %s; reports flowing", self.slot, self.hidg_path)
                     self.host_ok = True
             except BlockingIOError:
-                log.debug("hidg not ready (host not polling yet)")
+                log.debug("gun %d: hidg not ready (host not polling yet)", self.slot)
             except OSError as e:
                 # ESHUTDOWN (108) = gadget not connected to a host; log the transition only
                 if self.host_ok is not False:
-                    log.warning("no USB host on the gadget (%s); reports dropped until one appears", e)
+                    log.warning("gun %d: no USB host on the gadget (%s); reports dropped until one appears", self.slot, e)
                     self.host_ok = False
-        if self.feed:
+        if self.feed and self.slot == 1:
             self.feed.publish(buttons, x, y)
         self.last_sent = time.monotonic()
 
@@ -336,12 +358,13 @@ class Gun:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--hidg", default="/dev/hidg0")
+    ap.add_argument("--hidg", default="/dev/hidg0,/dev/hidg1",
+                    help="HID gadget device per gun, in player order (default /dev/hidg0,/dev/hidg1)")
     ap.add_argument("--dry-run", action="store_true", help="log reports instead of writing hidg")
     ap.add_argument("--rate", type=float, default=0.0,
                     help="max report rate in Hz (0 = send on every change)")
     ap.add_argument("--sse-port", type=int, default=0,
-                    help="serve the latest position as Server-Sent Events on this port for the dev tools (0 = off, the default)")
+                    help="serve gun 1's latest position as Server-Sent Events on this port for the dev tools (0 = off, the default)")
     ap.add_argument("--pedal-as", default="button:11",
                     help="what a Sinden pedal press does: button:N (joystick button N), trigger, or offscreen (default button:11)")
     ap.add_argument("--pedal-key", default="KEY_C", help="evdev key the pedal types (Sinden default KEY_C)")
@@ -373,62 +396,78 @@ def main():
     found = find_guns()
     if not found:
         return 1
-    if len(found) > 1:
-        log.warning("%d guns are plugged into this Cubie; using the first. Use one Cubie per gun.", len(found))
-        for _, nodes in found[1:]:
-            for d in nodes:
-                d.close()
-        found = found[:1]
 
-    # Present the gadget with the gun's own USB ID (no-op when it already has it).
+    # Present the gadget with gun 1's USB ID (no-op when it already has it).
     pid = found[0][1][0].info.product
     if not args.dry_run and pid in SINDEN_PIDS:
         r = subprocess.run([GADGET_SCRIPT, "up", f"0x{pid:04x}"], capture_output=True, text=True)
         if r.returncode != 0:
             log.error("gadget setup failed: %s", (r.stderr or r.stdout).strip())
             return 1
-    for _ in range(20):                  # the gadget's device node appears shortly after binding
-        if args.dry_run or os.path.exists(args.hidg):
+    wanted = [h for h in args.hidg.split(",") if h][:MAX_GUNS]
+    for _ in range(20):                  # the gadget's device nodes appear shortly after binding
+        if args.dry_run or all(os.path.exists(h) for h in wanted):
             break
         time.sleep(0.25)
-    else:
-        log.error("no HID gadget device %s; is sinden-gadget up?", args.hidg)
+    hidg_paths = [h for h in wanted if args.dry_run or os.path.exists(h)]
+    if not hidg_paths:
+        log.error("no HID gadget device (%s); is sinden-gadget up?", args.hidg)
         return 1
 
+    if len(found) > len(hidg_paths):
+        log.warning("%d guns attached but only %d gadget slot(s); ignoring the rest", len(found), len(hidg_paths))
+        for _, nodes in found[len(hidg_paths):]:
+            for d in nodes:
+                d.close()
+        found = found[:len(hidg_paths)]
+
     feed = PositionFeed(args.sse_port) if args.sse_port else None
-    gun = Gun(found[0][0], found[0][1], args.hidg, args, feed)
-    fds = {d.fd: d for d in gun.nodes}
-    gun_paths = {d.path for d in gun.nodes}
+    guns = [Gun(i + 1, key, nodes, hidg_paths[i], args, feed) for i, (key, nodes) in enumerate(found)]
+    known_keys = gun_keys()
+    fds = {d.fd: (g, d) for g in guns for d in g.nodes}      # fd → (gun, node)
+    gun_paths = {d.path for g in guns for d in g.nodes}
     min_interval = 1.0 / args.rate if args.rate > 0 else 0.0
 
-    pedals = {}                          # fd → pedal device
+    pedals = {}                          # fd → (pedal device, gun)
     next_scan = 0.0
+    input_nodes = set()                  # /dev/input/event* seen at the last scan
 
     def scan_pedals():
-        have = {d.path for d in pedals.values()}
+        have = {d.path for d, _ in pedals.values()}
         new = False
         for d in find_pedal_devices(gun_paths | have):
+            order = sorted([usb_key(x) for x, _ in pedals.values()] + [usb_key(d)])
+            gun = guns[min(order.index(usb_key(d)), len(guns) - 1)]
             try:
                 d.grab()
             except OSError as e:
                 log.warning("grab pedal %s failed: %s", d.path, e)
-            pedals[d.fd] = d
+            pedals[d.fd] = (d, gun)
             new = True
-            log.info("pedal %s '%s' (%04x:%04x) → %s", d.path, d.name, d.info.vendor, d.info.product, args.pedal_as)
+            log.info("pedal %s '%s' (%04x:%04x) → gun %d %s", d.path, d.name, d.info.vendor, d.info.product,
+                     gun.slot, args.pedal_as)
         if new:
             pedal_keyboard_mode()
 
-    log.info("bridging 16c0:%04x → %s%s", pid, args.hidg if not args.dry_run else "(dry run)",
+    log.info("bridging %d gun(s) as 16c0:%04x%s", len(guns), pid,
              "  [pump = off-screen shot]" if args.pump_offscreen_shot else "")
     while True:
         now = time.monotonic()
         if now >= next_scan:
             next_scan = now + 3.0
-            scan_pedals()
+            # Scanning opens and closes every input node, and each close blocks 15-50 ms in the kernel,
+            # which stalled both guns for ~0.65 s. Only scan when a node has come or gone.
+            nodes_now = set(evdev.list_devices())
+            if nodes_now != input_nodes:
+                input_nodes = nodes_now
+                scan_pedals()
+                if gun_keys() - known_keys:
+                    log.info("another gun was plugged in; restarting to pick it up")
+                    return 0
         ready, _, _ = select.select(list(fds) + list(pedals), [], [], 1.0)
         for fd in ready:
             if fd in pedals:
-                d = pedals[fd]
+                d, gun = pedals[fd]
                 try:
                     events = list(d.read())
                 except OSError:
@@ -443,11 +482,11 @@ def main():
                     if ev.type == E.EV_KEY and ev.code == pedal_key and ev.value in (0, 1):
                         gun.pedal(bool(ev.value), pedal_mode, pedal_bit)
                 continue
-            d = fds[fd]
+            gun, d = fds[fd]
             try:
                 events = list(d.read())
             except OSError as e:
-                log.error("gun node %s went away (%s); exiting for restart", d.path, e)
+                log.error("gun %d node %s went away (%s); exiting for restart", gun.slot, d.path, e)
                 return 1
             gun.handle(d, events, min_interval)
 

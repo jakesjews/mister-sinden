@@ -1,0 +1,58 @@
+diff --color -ru /tmp/uvc-orig/uvc_driver.c src/uvc_driver.c
+--- /tmp/uvc-orig/uvc_driver.c	2026-10-01 04:25:50.527778156 -0400
++++ src/uvc_driver.c	2026-10-01 04:25:50.551401294 -0400
+@@ -34,6 +34,7 @@
+ static unsigned int uvc_quirks_param = -1;
+ unsigned int uvc_dbg_param;
+ unsigned int uvc_timeout_param = UVC_CTRL_STREAMING_TIMEOUT;
++unsigned int uvc_bandwidth_cap_param;
+ 
+ /* ------------------------------------------------------------------------
+  * Video formats
+@@ -2610,6 +2611,8 @@
+ MODULE_PARM_DESC(trace, "Trace level bitmask");
+ module_param_named(timeout, uvc_timeout_param, uint, S_IRUGO|S_IWUSR);
+ MODULE_PARM_DESC(timeout, "Streaming control requests timeout");
++module_param_named(bandwidth_cap, uvc_bandwidth_cap_param, uint, S_IRUGO|S_IWUSR);
++MODULE_PARM_DESC(bandwidth_cap, "Cap the isochronous payload size a camera may reserve, in bytes per (micro)frame (0 = no cap)");
+ 
+ /* ------------------------------------------------------------------------
+  * Driver initialization and cleanup
+diff --color -ru /tmp/uvc-orig/uvc_video.c src/uvc_video.c
+--- /tmp/uvc-orig/uvc_video.c	2026-10-01 04:25:50.528112864 -0400
++++ src/uvc_video.c	2026-10-01 04:25:50.551674169 -0400
+@@ -231,6 +231,23 @@
+ 
+ 		ctrl->dwMaxPayloadTransferSize = bandwidth;
+ 	}
++
++	/*
++	 * mister-sinden: some cameras (the Sinden Lightgun's among them) ask for
++	 * the largest high-speed isochronous payload at every resolution, far
++	 * more than their MJPEG stream needs. Two of them then reserve most of
++	 * a USB 2.0 bus and starve everything else on it. Let the administrator
++	 * cap the payload size, which makes the driver pick a smaller alternate
++	 * setting (same idea as Batocera's bandwidth_cap patch).
++	 */
++	if (uvc_bandwidth_cap_param &&
++	    stream->intf->num_altsetting > 1 &&
++	    ctrl->dwMaxPayloadTransferSize > uvc_bandwidth_cap_param) {
++		dev_info(&stream->intf->dev,
++			 "bandwidth capped from %u to %u bytes per (micro)frame\n",
++			 ctrl->dwMaxPayloadTransferSize, uvc_bandwidth_cap_param);
++		ctrl->dwMaxPayloadTransferSize = uvc_bandwidth_cap_param;
++	}
+ }
+ 
+ static size_t uvc_video_ctrl_size(struct uvc_streaming *stream)
+diff --color -ru /tmp/uvc-orig/uvcvideo.h src/uvcvideo.h
+--- /tmp/uvc-orig/uvcvideo.h	2026-10-01 04:25:50.526814324 -0400
++++ src/uvcvideo.h	2026-10-01 04:25:50.551555085 -0400
+@@ -754,6 +754,7 @@
+ extern unsigned int uvc_no_drop_param;
+ extern unsigned int uvc_dbg_param;
+ extern unsigned int uvc_timeout_param;
++extern unsigned int uvc_bandwidth_cap_param;
+ extern unsigned int uvc_hw_timestamps_param;
+ 
+ #define uvc_dbg(_dev, flag, fmt, ...)					\

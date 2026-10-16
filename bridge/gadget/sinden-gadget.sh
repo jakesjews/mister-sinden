@@ -6,10 +6,13 @@
 #   sinden-gadget.sh down       unbind+remove it
 #   sinden-gadget.sh status
 #
-# The gadget uses the same USB ID as the gun plugged into the Cubie (16c0:0f01 blue, 0f02 red,
-# 0f38 black, 0f39 "player 2"), so the MiSTer sees that gun, and two Cubies with two guns look
-# like two different Sindens. The bridge calls "up <PID>" once it has seen the gun; the ID is
-# remembered, so on later boots the gadget comes up right away with the same ID.
+# The gadget carries two identical joystick interfaces (hid.usb0 → /dev/hidg0 = gun 1,
+# hid.usb1 → /dev/hidg1 = gun 2). MiSTer sees each interface as its own Sinden gun; an interface
+# with no gun behind it simply never sends anything.
+#
+# The gadget uses the same USB ID as gun 1 (16c0:0f01 blue, 0f02 red, 0f38 black, 0f39
+# "player 2"), so the MiSTer sees that gun. The bridge calls "up <PID>" once it has seen the gun;
+# the ID is remembered, so on later boots the gadget comes up right away with the same ID.
 #
 # Descriptor: one Joystick application collection = 16 buttons + X/Y 16-bit 0..65535.
 # Linux hid-input maps Button 1..16 in a Joystick collection to BTN_TRIGGER(0x120)..0x12F,
@@ -55,6 +58,10 @@ up() {
         log "gun changed: USB ID $(cat "$G/idProduct") -> $PID"
         down
     fi
+    if [ -d "$G" ] && [ ! -d "$G/functions/hid.usb1" ]; then
+        log "replacing the old single-gun gadget"
+        down
+    fi
     mkdir -p "$(dirname "$STATE")" && echo "$PID" > "$STATE"
     if [ -d "$G" ]; then
         log "gadget exists; rebinding"
@@ -71,12 +78,15 @@ up() {
         mkdir -p "$G/configs/c.1/strings/0x409"
         echo "Lightgun"                  > "$G/configs/c.1/strings/0x409/configuration"
         echo 500                         > "$G/configs/c.1/MaxPower"
-        mkdir -p "$G/functions/hid.usb0"
-        echo 0              > "$G/functions/hid.usb0/protocol"
-        echo 0              > "$G/functions/hid.usb0/subclass"
-        echo $REPORT_LENGTH > "$G/functions/hid.usb0/report_length"
-        printf "$(echo $REPORT_DESC | tr -d ' ' | sed 's/../\\x&/g')" > "$G/functions/hid.usb0/report_desc"
-        ln -sf "$G/functions/hid.usb0" "$G/configs/c.1/"
+        for n in 0 1; do
+            F="$G/functions/hid.usb$n"
+            mkdir -p "$F"
+            echo 0              > "$F/protocol"
+            echo 0              > "$F/subclass"
+            echo $REPORT_LENGTH > "$F/report_length"
+            printf "$(echo $REPORT_DESC | tr -d ' ' | sed 's/../\\x&/g')" > "$F/report_desc"
+            ln -sf "$F" "$G/configs/c.1/"
+        done
     fi
     if [ "$(cat "$G/UDC")" = "$UDC_NAME" ]; then
         log "already bound to $UDC_NAME"
@@ -91,7 +101,7 @@ up() {
 down() {
     [ -d "$G" ] || { log "no gadget"; return 0; }
     echo "" > "$G/UDC" 2>/dev/null || true
-    # remove whatever is there (an older version of this script made two functions)
+    # remove whatever is there (older versions of this script made a different set of functions)
     find "$G/configs" -maxdepth 2 -type l -exec rm -f {} + 2>/dev/null || true
     rmdir "$G"/configs/*/strings/* "$G"/configs/* "$G"/functions/* "$G"/strings/* 2>/dev/null || true
     if rmdir "$G" 2>/dev/null; then log "removed"; else log "could not fully remove the gadget"; return 1; fi

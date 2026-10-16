@@ -38,9 +38,9 @@ re-presents the gun's HID output to the MiSTer as a Sinden-in-joystick-mode devi
                  │                     ABS_X/Y 0..32767; keyboard report = KEY_*)   │
                  │                                                                  │
                  │   [1] sinden driver ── camera → aim → serial write to gun ──▶ gun │
-                 │   [2] hid-bridge   ── gun evdev → normalize → /dev/hidg0          │
+                 │   [2] hid-bridge   ── gun evdev → normalize → /dev/hidg0, hidg1   │
                  │                                                                  │
-                 │ USB 2.0 OTG port (sunxi UDC, the gun's own 16c0:0fxx, 1 HID iface)│
+                 │ USB 2.0 OTG port (sunxi UDC, gun 1's 16c0:0fxx, one HID per gun)  │
                  └────────────────────────────┬─────────────────────────────────────┘
                                               │ USB
                                               ▼
@@ -56,13 +56,15 @@ re-presents the gun's HID output to the MiSTer as a Sinden-in-joystick-mode devi
 - **[1] Driver.** v1 = vendor `LightgunMono.exe` (Pi5 folder of Sinden's V2.08b zip is the
   aarch64 build; runs under Debian's Mono 6.8, verified on the board). v2 = `sindenrs`
   (Rust, clean-room, 2–5 ms/frame, no Mono) once v1 works end to end.
-- **[2] hid-bridge.** A small daemon that reads the gun's evdev nodes, rescales X/Y to
-  0..65535, maps buttons to Button 1..16, and writes 6-byte reports to `/dev/hidg0`.
+- **[2] hid-bridge.** A small daemon that reads each gun's evdev nodes, rescales X/Y to
+  0..65535, maps buttons to Button 1..16, and writes 6-byte reports to that gun's gadget
+  function (`/dev/hidg0` for gun 1, `/dev/hidg1` for gun 2).
   Because the driver's output always round-trips through the gun's HID, the bridge is the
   same regardless of which driver is used. If the gun's own joystick-mode descriptor turns
   out to already be MiSTer-perfect, the bridge can become a raw hidraw → hidg passthrough.
-- **Gadget.** `bridge/gadget/sinden-gadget.sh` builds the configfs gadget: one Joystick
-  application collection, 16 buttons + X/Y 16-bit 0..65535. Linux/MiSTer maps Button 1..16
+- **Gadget.** `bridge/gadget/sinden-gadget.sh` builds the configfs gadget: two identical HID
+  functions (one per gun), each one Joystick application collection, 16 buttons + X/Y 16-bit
+  0..65535. Linux/MiSTer maps Button 1..16
   of a Joystick collection to `BTN_TRIGGER (0x120)..0x12F` (trigger 0x120, front-left 0x121,
   rear-left 0x122, rear-right 0x123, front-right 0x124, D-pad 0x125–0x128, pump 0x129, pedal 0x12a
   — the numbering Sinden's own MiSTer docs assume).
@@ -82,7 +84,9 @@ The Sinden pedal is its own USB device: `16d0:1094 "Sinden Technology Ltd Sinden
 keyboard that types `c` (reassignable) plus a CDC serial port. It plugs into a USB hub on the Cubie's
 host port next to the gun (e.g. [UGREEN USB-C to 4× USB-A](https://www.amazon.com/dp/B07PY87TBD)). The bridge grabs its keyboard
 node and merges it into the gun's HID report as joystick button 11 (evdev `0x12a` on the MiSTer;
-`--pedal-as trigger|offscreen` are alternatives), hot-pluggable (rescanned every 3 s).
+`--pedal-as trigger|offscreen` are alternatives), hot-pluggable: every 3 s the bridge lists `/dev/input` and rescans only if a node came or went.
+A full rescan opens and closes every input node, and each close blocks 15–50 ms in the kernel; scanning
+unconditionally froze both guns for ~0.65 s every 3 s (measured 2026-10-16).
 
 It has to share the gun's USB device: Main_MiSTer never merges separate USB devices, and its
 "Define buttons" wizard locks onto the one device that presses first. As a button of the gun
@@ -111,34 +115,61 @@ device number) differs from the set recorded when the driver last started.
 
 ### Two guns
 
-One Cubie per gun. The gadget copies the USB ID of the gun plugged into the Cubie (16c0:0f01 blue,
-0f02 red, 0f38 black, 0f39 "player 2"; `sinden-gadget.sh up <pid>`, called by the bridge and
-remembered in `/var/lib/mister-sinden/gadget-pid`), so two Cubies look to the MiSTer like two real
-Sindens: separate devices, with separate maps and calibration when their IDs differ. After a core
-loads, the first device to press a button from its global map takes the lowest free player.
+Both guns plug into one Cubie. The gadget carries two joystick interfaces (`/dev/hidg0` for gun 1,
+`/dev/hidg1` for gun 2; an interface with no gun behind it never sends anything) and takes gun 1's
+USB ID (16c0:0f01 blue, 0f02 red, 0f38 black, 0f39 "player 2"; `sinden-gadget.sh up <pid>`, called
+by the bridge and remembered in `/var/lib/mister-sinden/gadget-pid`). Gun 2 is the gun whose own ID
+marks it as a player-2 gun (0f02, 0f39), otherwise the one on the later USB port. The first pedal
+(by USB port) belongs to gun 1, a second pedal to gun 2.
 
-Two guns on one Cubie was built and abandoned (branch `two-guns-one-cubie`). Findings:
+To the MiSTer the two interfaces are separate devices with the same USB ID. Main names its map and
+calibration files by that ID, so both guns share one button map and one calibration per core.
+After a core loads, the first device to press a button from its global map takes the lowest free
+player.
 
-- **Processing is fine**: the vendor driver runs two guns in one instance at about one core.
+What two guns need that one does not:
+
+- **Processing**: nothing. The vendor driver runs two guns in one instance at about one core.
 - **USB bandwidth**: each Sinden camera uses isochronous alt 11 (3×1020 = 3060 bytes per
   microframe, the high-speed maximum) at every MJPEG resolution. Two reserve ~80 % of the Cubie's
   single USB 2.0 bus. A `uvcvideo` `bandwidth_cap` parameter (as in Batocera's kernel patch) brings
-  them down to alt 7 (1280 bytes) with no loss of frame rate.
-- **Power is the blocker**: the Cubie's 5 V rail is fed through one MiSTer USB port and is shared
-  with the host port the guns hang off. When the CPU load steps up the rail dips and both guns
-  disconnect within ~300 ms (reproduced with the driver stopped: cameras streaming, then an
-  8-core load; no drop with the CPU capped at ~1 GHz). One gun has enough margin. Two would need
-  a powered hub for the guns, which was not tested.
+  them down to alt 7 (1280 bytes) with no loss of frame rate. `bridge/install.sh` builds
+  `bridge/uvcvideo-dkms` (the driver from Linux 5.15.147 plus that parameter) through DKMS and
+  sets `bandwidth_cap=1000`.
+- **Power**: the Cubie's 5 V rail is fed through one MiSTer USB port and is shared with the host
+  port the guns hang off. With two guns on it, when the CPU load steps up the rail dips and both
+  guns disconnect within ~300 ms (reproduced with the driver stopped: cameras streaming, then an
+  8-core load; no drop with the CPU capped at ~1 GHz). One gun has enough margin. Two guns
+  therefore go on a powered hub on the Cubie's USB 3.1 port. With a StarTech ST4300USB3V2 there,
+  30 s of 8-core load gave no USB disconnects (65 °C, big cores throttled to 1.4 GHz).
 - Both CPU clusters start throttling at 60 °C; without a heatsink the board idles at 57–65 °C.
 
-### Why one HID interface, joystick class
+One Cubie per gun, both on the MiSTer's USB hub, was tried instead and failed on power: both boards
+switched off together in normal use and again when booting at the same time, and stayed off until
+replugged. An 8-core load on one board switched it off after about five seconds and knocked the
+other board's gun off its USB in the same second.
+
+### Power-off
+
+The Cubie is powered from the MiSTer and loses power without warning whenever the MiSTer is
+switched off. Root is an ordinary read-write ext4 and its journal has recovered every time so far.
+Two things keep the card quiet and consistent:
+
+- The system journal lives in RAM (`bridge/journald/volatile.conf`) and the Sinden driver logs to
+  it rather than to a file. Those two were the steady writers: about 80 card writes a minute
+  before, 16 after (the time-sync clock file and the desktop session's state).
+- `bridge/install.sh` runs `sync` after copying. A power cut 30 seconds after an install once left
+  `/opt/sinden/LightgunMono.exe.config` empty, and the driver then loops on "Error Initializing
+  the configuration system".
+
+### Why joystick class, one interface per gun
 
 Main_MiSTer does not merge devices across USB interfaces, so a keyboard collection would be
 enumerated as a separate device and could grab a player slot; a mouse collection
 (`BTN_LEFT` + `ABS_X/Y`) makes MiSTer's kernel create `/dev/input/mouseN` and Main feeds it to
 the core as PS/2 mouse motion in parallel ("aim is off" reports for Gun4IR/AimTrak in mouse
 mode). Buttons 0x110–0x11F are diverted to mouse buttons and never reach the joystick mapper.
-Everything therefore goes on one joystick collection with buttons ≥ 0x120.
+Everything from one gun therefore goes on one joystick collection with buttons ≥ 0x120.
 
 ### MiSTer-side requirements (unmodified cores)
 
